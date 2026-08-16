@@ -15,7 +15,10 @@ export class FishClient implements VoiceProvider {
   async createVoice(input:{name:string;references:VoiceReference[]}){
     if(!input.references.length)throw new Error('Fish model creation requires at least one reference');
     const form=new FormData();form.set('title',input.name);form.set('visibility','private');form.set('type','tts');form.set('train_mode','fast');
-    for(const r of input.references){form.append('voices',new Blob([await readFile(r.path)]),path.basename(r.path));form.append('texts',r.transcript??'');}
+    const transcripts=input.references.map(r=>r.transcript?.trim());
+    if(transcripts.some(Boolean)&&!transcripts.every(Boolean))throw new Error('Fish reference transcripts must be supplied for every reference or omitted for automatic ASR');
+    for(const r of input.references)form.append('voices',new Blob([await readFile(r.path)]),path.basename(r.path));
+    if(transcripts.every(Boolean))for(const transcript of transcripts)form.append('texts',transcript!);
     const res=await this.request(`${this.base}/model`,{method:'POST',headers:this.headers(),body:form},'Fish model creation');
     const body=await res.json() as {id?:string;_id?:string};const id=body.id??body._id;if(!id)throw new Error('Fish returned no model ID');return {id};
   }
@@ -26,12 +29,15 @@ export class FishClient implements VoiceProvider {
   async streamSynthesize(i:{voiceId:string;text:string;speed?:number},onAudio:(chunk:Uint8Array)=>Promise<void>|void,signal?:AbortSignal){
     const url=new URL('/v1/tts/live',this.base.replace(/^http/,'ws'));
     await new Promise<void>((resolve,reject)=>{
-      const ws=new WebSocket(url,{headers:{Authorization:`Bearer ${this.apiKey}`}});let settled=false;let audioWrites=Promise.resolve();
-      const finish=(error?:Error)=>{if(settled)return;settled=true;signal?.removeEventListener('abort',abort);if(error)reject(error);else resolve();};
-      const abort=()=>{ws.close();finish(new DOMException('TTS streaming aborted','AbortError'));};signal?.addEventListener('abort',abort,{once:true});
-      ws.once('open',()=>{ws.send(encode({event:'start',request:{text:'',reference_id:i.voiceId,format:'mp3',latency:'balanced',prosody:{speed:i.speed??1}}}));ws.send(encode({event:'text',text:i.text}));ws.send(encode({event:'flush'}));ws.send(encode({event:'stop'}));});
-      ws.on('message',data=>{try{const event=decode(data instanceof Buffer?data:Buffer.from(data as ArrayBuffer)) as {event?:string;audio?:Uint8Array;message?:string};if(event.event==='audio'&&event.audio?.length)audioWrites=audioWrites.then(()=>onAudio(event.audio!) as Promise<void>|void);else if(event.event==='finish')void audioWrites.then(()=>finish(),error=>finish(error instanceof Error?error:new Error(String(error))));else if(event.event==='error')finish(new Error(`Fish realtime TTS failed: ${event.message??'unknown error'}`));}catch(error){finish(error instanceof Error?error:new Error(String(error)));}});
-      ws.once('error',error=>finish(error));ws.once('close',()=>void audioWrites.then(()=>finish(),error=>finish(error instanceof Error?error:new Error(String(error)))));
+      const ws=new WebSocket(url,{headers:{Authorization:`Bearer ${this.apiKey}`}});let settled=false,successfulFinish=false,receivedAudio=false;let audioWrites=Promise.resolve();let firstTimer:NodeJS.Timeout|undefined,idleTimer:NodeJS.Timeout|undefined;
+      const openTimer=setTimeout(()=>finish(new Error('Fish realtime TTS connection timeout')),this.timeoutMs);
+      const clearTimers=()=>{clearTimeout(openTimer);if(firstTimer)clearTimeout(firstTimer);if(idleTimer)clearTimeout(idleTimer);};
+      const finish=(error?:Error)=>{if(settled)return;settled=true;clearTimers();signal?.removeEventListener('abort',abort);ws.removeAllListeners();ws.on('error',()=>undefined);if(ws.readyState===WebSocket.OPEN)ws.close();else if(ws.readyState===WebSocket.CONNECTING)ws.terminate();if(error)reject(error);else resolve();};
+      const resetIdle=()=>{if(idleTimer)clearTimeout(idleTimer);idleTimer=setTimeout(()=>finish(new Error('Fish realtime TTS idle timeout')),this.timeoutMs);};
+      const abort=()=>finish(new DOMException('TTS streaming aborted','AbortError'));if(signal?.aborted)return abort();signal?.addEventListener('abort',abort,{once:true});
+      ws.once('open',()=>{clearTimeout(openTimer);firstTimer=setTimeout(()=>finish(new Error('Fish realtime TTS first-audio timeout')),this.timeoutMs);resetIdle();ws.send(encode({event:'start',request:{text:'',reference_id:i.voiceId,format:'mp3',latency:'balanced',prosody:{speed:i.speed??1}}}));ws.send(encode({event:'text',text:i.text}));ws.send(encode({event:'flush'}));ws.send(encode({event:'stop'}));});
+      ws.on('message',data=>{try{resetIdle();const event=decode(data instanceof Buffer?data:Buffer.from(data as ArrayBuffer)) as {event?:string;audio?:Uint8Array;message?:string;reason?:string};if(event.event==='audio'&&event.audio?.length){receivedAudio=true;if(firstTimer)clearTimeout(firstTimer);audioWrites=audioWrites.then(()=>onAudio(event.audio!) as Promise<void>|void);audioWrites.catch(error=>finish(error instanceof Error?error:new Error(String(error))));}else if(event.event==='finish'){if(event.reason!=='stop')return finish(new Error(`Fish realtime TTS failed: finish reason ${event.reason??'missing'}`));if(!receivedAudio)return finish(new Error('Fish realtime TTS finished without audio'));successfulFinish=true;void audioWrites.then(()=>finish(),error=>finish(error instanceof Error?error:new Error(String(error))));}else if(event.event==='error')finish(new Error(`Fish realtime TTS failed: ${event.message??'unknown error'}`));}catch(error){finish(error instanceof Error?error:new Error(String(error)));}});
+      ws.once('error',error=>finish(error));ws.once('close',()=>{if(!successfulFinish)finish(new Error('Fish realtime TTS socket closed before finish(stop)'));});
     });
   }
   async deleteVoice(id:string){
