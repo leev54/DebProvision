@@ -2,23 +2,22 @@ import {EndBehaviorType,type VoiceConnection} from '@discordjs/voice';
 import prism from 'prism-media';
 import {randomUUID} from 'node:crypto';
 import type {VoiceProvider} from '../services/fish/VoiceProvider.js';import type {TranscriptionService} from '../services/transcription/TranscriptionService.js';import type {DiscordVoiceRuntime} from '../voice/DiscordVoiceRuntime.js';import {wavFromPcm} from '../audio/wav.js';import {LiveVoicePipeline} from './LiveVoicePipeline.js';import {logger} from '../utils/logger.js';
-interface Session {pipeline:LiveVoicePipeline;controller:AbortController;detach:()=>void;streams:Set<{destroy:(error?:Error)=>void}>;groupId:string;sequence:number;tail:Promise<void>}
+interface Session {pipeline:LiveVoicePipeline;controller:AbortController;detach:()=>void;streams:Set<{destroy:(error?:Error)=>void}>;receiving:boolean;groupId:string;sequence:number;tail:Promise<void>}
 export class DiscordLiveService {
   private sessions=new Map<string,Session>();
   constructor(private transcription:TranscriptionService,private fish:VoiceProvider,private voice:DiscordVoiceRuntime,private maxLagMs=3000,private maxUtteranceMs=120_000){}
   start(guild:string,connection:VoiceConnection,sourceUser:string,voiceId:string,alias=voiceId){
     if(this.sessions.has(guild))throw new Error('Live mode is already active');
-    const pipeline=new LiveVoicePipeline(sourceUser,voiceId,this.maxLagMs,alias);const session:Session={pipeline,controller:new AbortController(),streams:new Set(),groupId:`live:${guild}:${randomUUID()}`,detach:()=>{},sequence:0,tail:Promise.resolve()};
+    const pipeline=new LiveVoicePipeline(sourceUser,voiceId,this.maxLagMs,alias);const session:Session={pipeline,controller:new AbortController(),streams:new Set(),receiving:false,groupId:`live:${guild}:${randomUUID()}`,detach:()=>{},sequence:0,tail:Promise.resolve()};
     const handler=(user:string)=>{
-      if(user!==sourceUser||session.controller.signal.aborted)return;
-      const beganAt=Date.now(),sequence=session.sequence++;const opus=connection.receiver.subscribe(user,{end:{behavior:EndBehaviorType.AfterSilence,duration:350}});const decoder=new prism.opus.Decoder({rate:48_000,channels:2,frameSize:960});const chunks:Buffer[]=[];let bytes=0,completed=false;
-      const control={destroy:()=>complete(false)};session.streams.add(control);
-      const timer=setTimeout(()=>complete(true),this.maxUtteranceMs);
-      const complete=(keep:boolean,error?:unknown)=>{if(completed)return;completed=true;clearTimeout(timer);session.streams.delete(control);opus.unpipe(decoder);if(!opus.destroyed)opus.destroy();if(!decoder.destroyed)decoder.destroy();if(error&&!session.controller.signal.aborted)logger.warn({err:error,guild},'live receive stream ended with an error');if(keep&&!session.controller.signal.aborted){const pcm=Buffer.concat(chunks),completedAt=Date.now();session.tail=session.tail.then(()=>this.process(guild,session,pcm,beganAt,completedAt,sequence));}};
-      decoder.on('data',(chunk:Buffer)=>{bytes+=chunk.length;if(bytes<=this.maxUtteranceMs*48_000*2*2/1000)chunks.push(Buffer.from(chunk));else complete(true);});
-      opus.once('end',()=>complete(true));opus.once('error',error=>complete(false,error));opus.once('close',()=>complete(false));
-      decoder.once('end',()=>complete(true));decoder.once('error',error=>complete(false,error));decoder.once('close',()=>complete(false));
-      opus.pipe(decoder);
+      if(user!==sourceUser||session.controller.signal.aborted||session.receiving)return;session.receiving=true;
+      const beganAt=Date.now(),sequence=session.sequence++;const opus=connection.receiver.subscribe(user,{end:{behavior:EndBehaviorType.AfterSilence,duration:350}});const decoder=new prism.opus.Decoder({rate:48_000,channels:2,frameSize:960});const chunks:Buffer[]=[];let bytes=0,completed=false,cleanEnding=false;
+      const complete=(keep:boolean,error?:unknown)=>{if(completed)return;completed=true;session.receiving=false;clearTimeout(timer);session.streams.delete(control);opus.unpipe(decoder);if(!opus.destroyed)opus.destroy();if(!decoder.destroyed)decoder.destroy();if(error&&!session.controller.signal.aborted)logger.warn({err:error,guild},'live receive stream ended with an error');if(keep&&!session.controller.signal.aborted){const pcm=Buffer.concat(chunks),completedAt=Date.now();session.tail=session.tail.then(()=>this.process(guild,session,pcm,beganAt,completedAt,sequence));}};
+      const endCleanly=(continuation=false)=>{if(completed||cleanEnding)return;cleanEnding=true;session.receiving=false;clearTimeout(timer);opus.unpipe(decoder);if(!opus.destroyed)opus.destroy();decoder.end();if(continuation&&!session.controller.signal.aborted)setImmediate(()=>handler(user));};
+      const control={destroy:()=>complete(false)};session.streams.add(control);const timer=setTimeout(()=>endCleanly(true),this.maxUtteranceMs);
+      decoder.on('data',(chunk:Buffer)=>{bytes+=chunk.length;if(bytes<=this.maxUtteranceMs*48_000*2*2/1000)chunks.push(Buffer.from(chunk));else endCleanly(true);});
+      opus.once('end',()=>endCleanly());opus.once('error',error=>complete(false,error));opus.once('close',()=>{if(!cleanEnding)complete(false)});
+      decoder.once('end',()=>complete(cleanEnding));decoder.once('error',error=>complete(false,error));decoder.once('close',()=>{if(!completed)complete(false)});opus.pipe(decoder);
     };
     connection.receiver.speaking.on('start',handler);session.detach=()=>connection.receiver.speaking.off('start',handler);this.sessions.set(guild,session);
   }
