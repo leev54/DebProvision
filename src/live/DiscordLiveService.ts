@@ -7,13 +7,37 @@ export class DiscordLiveService {
   private sessions=new Map<string,Session>();
   constructor(private transcription:TranscriptionService,private fish:VoiceProvider,private voice:DiscordVoiceRuntime,private maxLagMs=3000,private maxUtteranceMs=120_000){}
   start(guild:string,connection:VoiceConnection,sourceUser:string,voiceId:string,alias=voiceId){
-    if(this.sessions.has(guild))throw new Error('Live mode is already active');const pipeline=new LiveVoicePipeline(sourceUser,voiceId,this.maxLagMs,alias);const session:Session={pipeline,controller:new AbortController(),streams:new Set(),groupId:`live:${guild}:${randomUUID()}`,detach:()=>{},sequence:0,tail:Promise.resolve()};
-    const handler=(user:string)=>{if(user!==sourceUser||session.controller.signal.aborted)return;const began=Date.now(),sequence=session.sequence++;const opus=connection.receiver.subscribe(user,{end:{behavior:EndBehaviorType.AfterSilence,duration:350}});const decoder=new prism.opus.Decoder({rate:48_000,channels:2,frameSize:960});session.streams.add(opus);session.streams.add(decoder);const chunks:Buffer[]=[];let bytes=0;decoder.on('data',(b:Buffer)=>{bytes+=b.length;if(bytes<=this.maxUtteranceMs*48_000*2*2/1000)chunks.push(Buffer.from(b));else opus.destroy();});decoder.once('close',()=>{session.streams.delete(opus);session.streams.delete(decoder);});decoder.once('end',()=>{const pcm=Buffer.concat(chunks),completed=Date.now();session.tail=session.tail.then(()=>this.process(guild,session,pcm,began,completed,sequence));});opus.on('error',()=>decoder.destroy());opus.pipe(decoder);};
+    if(this.sessions.has(guild))throw new Error('Live mode is already active');
+    const pipeline=new LiveVoicePipeline(sourceUser,voiceId,this.maxLagMs,alias);const session:Session={pipeline,controller:new AbortController(),streams:new Set(),groupId:`live:${guild}:${randomUUID()}`,detach:()=>{},sequence:0,tail:Promise.resolve()};
+    const handler=(user:string)=>{
+      if(user!==sourceUser||session.controller.signal.aborted)return;
+      const beganAt=Date.now(),sequence=session.sequence++;const opus=connection.receiver.subscribe(user,{end:{behavior:EndBehaviorType.AfterSilence,duration:350}});const decoder=new prism.opus.Decoder({rate:48_000,channels:2,frameSize:960});const chunks:Buffer[]=[];let bytes=0,completed=false;
+      const control={destroy:()=>complete(false)};session.streams.add(control);
+      const timer=setTimeout(()=>complete(true),this.maxUtteranceMs);
+      const complete=(keep:boolean,error?:unknown)=>{if(completed)return;completed=true;clearTimeout(timer);session.streams.delete(control);opus.unpipe(decoder);if(!opus.destroyed)opus.destroy();if(!decoder.destroyed)decoder.destroy();if(error&&!session.controller.signal.aborted)logger.warn({err:error,guild},'live receive stream ended with an error');if(keep&&!session.controller.signal.aborted){const pcm=Buffer.concat(chunks),completedAt=Date.now();session.tail=session.tail.then(()=>this.process(guild,session,pcm,beganAt,completedAt,sequence));}};
+      decoder.on('data',(chunk:Buffer)=>{bytes+=chunk.length;if(bytes<=this.maxUtteranceMs*48_000*2*2/1000)chunks.push(Buffer.from(chunk));else complete(true);});
+      opus.once('end',()=>complete(true));opus.once('error',error=>complete(false,error));opus.once('close',()=>complete(false));
+      decoder.once('end',()=>complete(true));decoder.once('error',error=>complete(false,error));decoder.once('close',()=>complete(false));
+      opus.pipe(decoder);
+    };
     connection.receiver.speaking.on('start',handler);session.detach=()=>connection.receiver.speaking.off('start',handler);this.sessions.set(guild,session);
   }
-  private async process(guild:string,session:Session,pcm:Buffer,began:number,completed:number,sequence:number){if(pcm.length<9600||session.controller.signal.aborted||Date.now()-completed>this.maxLagMs)return;try{const capture=completed-began;const asrAt=Date.now();const result=await this.transcription.transcribeWav(wavFromPcm(pcm),session.controller.signal);const asr=Date.now()-asrAt;if(!result.text||!session.pipeline.active||session.controller.signal.aborted)return;const queuedAt=Date.now();let firstAudioAt=0;
-    this.voice.enqueueStream(guild,`Live ${sequence}: ${result.text.slice(0,50)}`,async(stream,playbackSignal)=>{const playStartedAt=Date.now();if(playStartedAt-queuedAt>this.maxLagMs)throw new Error('Live utterance discarded because queued backlog became stale');const signal=AbortSignal.any([session.controller.signal,playbackSignal]);await this.fish.streamSynthesize({voiceId:session.pipeline.target(),text:result.text},async chunk=>{if(!firstAudioAt)firstAudioAt=Date.now();if(!stream.write(chunk))await new Promise<void>((resolve,reject)=>{stream.once('drain',resolve);stream.once('error',reject);signal.addEventListener('abort',()=>reject(signal.reason),{once:true});});},signal);const first=firstAudioAt||Date.now();session.pipeline.latency.record({capture,asr,queueWait:playStartedAt-queuedAt,ttsFirstAudio:first-playStartedAt,mouthToFirstAudio:first-began});},session.groupId);
-  }catch(err){if(!session.controller.signal.aborted)logger.error({err,guild},'live utterance failed');}}
+  private async process(guild:string,session:Session,pcm:Buffer,beganAt:number,completedAt:number,sequence:number){
+    const timing={beganAt,completedAt,asrStartedAt:0,asrFinishedAt:0,ttsQueuedAt:0,playbackStartedAt:0,firstAudioAt:0};const deadline=completedAt+this.maxLagMs;const remaining=()=>deadline-Date.now();
+    if(pcm.length<9600||session.controller.signal.aborted||remaining()<=0)return;
+    try{
+      timing.asrStartedAt=Date.now();const asrFreshness=AbortSignal.timeout(Math.max(1,remaining()));const asrSignal=AbortSignal.any([session.controller.signal,asrFreshness]);
+      const result=await this.transcription.transcribeWav(wavFromPcm(pcm),asrSignal);timing.asrFinishedAt=Date.now();
+      if(!result.text||!session.pipeline.active||session.controller.signal.aborted||remaining()<=0)return;
+      timing.ttsQueuedAt=Date.now();
+      this.voice.enqueueStream(guild,`Live ${sequence}: ${result.text.slice(0,50)}`,async(stream,playbackSignal)=>{
+        timing.playbackStartedAt=Date.now();if(remaining()<=0)throw new Error('Live utterance discarded because completed speech became stale before playback');
+        const freshness=new AbortController();const timer=setTimeout(()=>freshness.abort(new DOMException('Live first-audio deadline exceeded','TimeoutError')),Math.max(1,remaining()));const signal=AbortSignal.any([session.controller.signal,playbackSignal,freshness.signal]);
+        try{await this.fish.streamSynthesize({voiceId:session.pipeline.target(),text:result.text},async chunk=>{if(!timing.firstAudioAt){timing.firstAudioAt=Date.now();clearTimeout(timer);if(timing.firstAudioAt>deadline)throw new DOMException('Live first-audio deadline exceeded','TimeoutError');}if(!stream.write(chunk))await new Promise<void>((resolve,reject)=>{stream.once('drain',resolve);stream.once('error',reject);signal.addEventListener('abort',()=>reject(signal.reason),{once:true});});},signal);}finally{clearTimeout(timer);}
+        const first=timing.firstAudioAt||Date.now();session.pipeline.latency.record({capture:timing.completedAt-timing.beganAt,asr:timing.asrFinishedAt-timing.asrStartedAt,queueWait:timing.playbackStartedAt-timing.ttsQueuedAt,ttsFirstAudio:first-timing.playbackStartedAt,mouthToFirstAudio:first-timing.beganAt});
+      },session.groupId);
+    }catch(err){if(!session.controller.signal.aborted&&!(err instanceof DOMException&&['AbortError','TimeoutError'].includes(err.name)))logger.error({err,guild},'live utterance failed');}
+  }
   async stop(guild:string){const session=this.sessions.get(guild);if(!session)return false;session.detach();session.pipeline.stop();session.controller.abort();for(const stream of session.streams)stream.destroy();session.streams.clear();this.voice.cancelGroup(guild,session.groupId);await session.tail;this.sessions.delete(guild);return true;}
   async stopAll(){await Promise.all([...this.sessions.keys()].map(guild=>this.stop(guild)));}
   status(guild:string){return this.sessions.get(guild)?.pipeline;}switchVoice(guild:string,id:string,alias?:string){const p=this.status(guild);if(!p)return false;p.switchVoice(id,alias);return true;}
