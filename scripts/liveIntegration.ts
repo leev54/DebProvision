@@ -13,7 +13,7 @@ await rest.get(Routes.guild(config.DISCORD_GUILD_ID));
 const installed=await rest.get(Routes.applicationGuildCommands(config.DISCORD_CLIENT_ID,config.DISCORD_GUILD_ID)) as {name:string}[];
 if(installed.length!==commands.length)throw new Error(`Discord installed ${installed.length}/${commands.length} commands`);
 console.log(`Discord authenticated; verified ${installed.length} registered guild commands.`);
-const fish=new FishClient(config.FISH_API_KEY);
+const fish=new FishClient(config.FISH_API_KEY,'https://api.fish.audio',config.FISH_REALTIME_TIMEOUT_MS,config.FISH_TTS_MODEL);
 let voiceId=process.env.FISH_TEST_VOICE_ID;let created=false;
 const reference=process.env.FISH_TEST_REFERENCE_FILE;
 if(reference){const referenceAudio=await readFile(reference);const transcription=await new FishTranscriptionService(config.FISH_API_KEY).transcribeWav(referenceAudio);if(!transcription.text)throw new Error('Fish ASR smoke test returned no text');console.log(`Fish ASR returned ${transcription.text.length} characters.`);const model=await fish.createVoice({name:`deployment-smoke-${Date.now()}`,references:[{path:reference,...(process.env.FISH_TEST_REFERENCE_TEXT?{transcript:process.env.FISH_TEST_REFERENCE_TEXT}:{})}]});voiceId=model.id;created=true;console.log(`Fish created private test model ${voiceId}.`);}

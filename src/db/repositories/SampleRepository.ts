@@ -10,6 +10,7 @@ export class SampleRepository {
     if(!s.filePath)throw new Error('A captured sample must have a file');
     this.db.prepare(`INSERT INTO samples(id,guild_id,voice_owner_id,file_path,duration_ms,captured_at,transcript,quality_score,speech_ratio,rms,peak,clipping_ratio,snr_estimate,reasons,is_best,exceptional,selected,review_status,active) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(s.id,guild,s.ownerId,s.filePath,Math.round(s.durationMs),s.capturedAt,s.transcript??null,s.qualityScore,s.speechRatio,s.rms,s.peak,s.clippingRatio,s.snrEstimate,JSON.stringify(s.reasons),+s.isBestSample,+s.exceptionalCandidate,+s.selectedForRebuild,s.reviewStatus??'pending',+s.active);
   }
+  async remove(id:string){const sample=this.get(id);this.db.transaction(()=>{this.db.prepare('DELETE FROM sample_reviews WHERE sample_id=?').run(id);this.db.prepare('DELETE FROM samples WHERE id=?').run(id);})();if(sample?.filePath)await rm(sample.filePath,{force:true});}
   list(guild:string,owner?:string,active=true){const rows=this.db.prepare(`SELECT * FROM samples WHERE guild_id=? ${owner?'AND voice_owner_id=?':''} ${active?'AND active=1':''} ORDER BY quality_score DESC`).all(...(owner?[guild,owner]:[guild])) as any[];return rows.map(row=>this.map(row));}
   eligible(guild:string,owner:string){return this.list(guild,owner).filter(s=>s.reviewStatus!=='rejected');}
   get(id:string){const row=this.db.prepare('SELECT * FROM samples WHERE id=?').get(id) as any;return row?this.map(row):undefined;}
