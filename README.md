@@ -1,6 +1,6 @@
 # Discord Fish Voice Bot
 
-A persistent, privacy-first Discord voice bot written in TypeScript. Users self-enroll, Discord audio is isolated by speaker, useful 5–30 second segments are quality-scored, curated, and used to build versioned private Fish Audio voices. Generated text is not stored. Unenrollment removes enrollment/voice metadata and deactivates samples; operators should configure Fish deletion and filesystem retention according to local privacy policy.
+A persistent, privacy-first Discord voice bot written in TypeScript. Users self-enroll, Discord audio is isolated by speaker, useful 2–30 second segments (the minimum defaults to 2 seconds) are quality-scored, curated, and used to build versioned private Fish Audio voices. Generated text is not stored. Unenrollment removes enrollment/voice metadata and deactivates samples; operators should configure Fish deletion and filesystem retention according to local privacy policy.
 
 ## Architecture and behavior
 
@@ -10,7 +10,7 @@ Live conversion is **STT → Fish TTS**, not true audio-to-audio conversion. Fis
 
 ### Automatic best-sample logic
 
-Every completed PCM segment is scored only from PCM-derived measurements: duration, detected speech/silence ratio, RMS/peak level, clipping ratio, estimated signal-to-noise ratio, and speech continuity. The bot never presents unmeasured properties as facts. After `/train stop`, each user’s highest-quality newly captured sample is posted with its measured score and reasons, audio attachment, and Accept/Reject controls; `/bestsample show` remains available for manual review.
+Every completed PCM segment is scored only from PCM-derived measurements: duration, detected speech/silence ratio, RMS/peak level, clipping ratio, estimated signal-to-noise ratio, and speech continuity. The bot never presents unmeasured properties as facts. After `/train stop`, each user’s highest-quality newly captured sample is announced with measured metadata only; raw training WAV files are never attached to public training messages. The owner can privately inspect and review the candidate with `/bestsample show`.
 
 ## Discord setup
 
@@ -20,7 +20,7 @@ Every completed PCM segment is scored only from PCM-derived measurements: durati
 
 ## Fish Audio setup
 
-Create an API key in Fish Audio, store it only as `FISH_API_KEY`, and ensure the account may create private models and call TTS. The isolated client uses private multipart model creation, multipart `/v1/asr`, JSON `/v1/tts`, realtime WebSocket `/v1/tts/live`, and deletes failed replacement models. The ASR implementation follows the official [Speech to Text](https://docs.fish.audio/api-reference/endpoint/openapi-v1/speech-to-text) multipart contract, and live synthesis follows the official [WebSocket TTS Streaming](https://docs.fish.audio/api-reference/endpoint/websocket/tts-live) MessagePack protocol at `/v1/tts/live`. API capabilities and account limits change; confirm these references before production rollout. IDs and authorization headers are never sent to Discord or logs.
+Create an API key in Fish Audio, store it only as `FISH_API_KEY`, and ensure the account may create private models and call TTS. The isolated client uses private multipart model creation, multipart `/v1/asr`, JSON `/v1/tts`, realtime WebSocket `/v1/tts/live`, and deletes failed replacement models. The ASR implementation follows the official [Speech to Text](https://docs.fish.audio/api-reference/endpoint/openapi-v1/speech-to-text) multipart contract, and live synthesis follows the official [WebSocket TTS Streaming](https://docs.fish.audio/api-reference/endpoint/websocket/tts-live) MessagePack protocol at `/v1/tts/live`. API capabilities and account limits change; confirm these references before production rollout. Secrets and authorization headers are never logged. Provider model IDs may be retained in the operator-only durable cleanup database and structured cleanup logs, but are never exposed in Discord responses.
 
 ## Run and deploy
 
@@ -56,6 +56,6 @@ Real Discord/Fish enrollment, capture, cloning, playback, and latency tests requ
 
 ### Fish TTS model
 `FISH_TTS_MODEL` selects the HTTP model and `FISH_REALTIME_MODEL` independently selects the WebSocket model. HTTP accepts `s1`, `s2-pro`, `s2.1-pro`, or `s2.1-pro-free`; realtime is restricted to the documented `s1` and `s2-pro` values and defaults to `s2-pro`.
-`s2.1-pro-free` is the free developer-tier option and the default. Fish model
+`s2.1-pro-free` is the free developer-tier HTTP option and the REST default. Fish model
 creation is independently capped at 20 curated references by
 `FISH_MAX_MODEL_REFERENCES`; `MAX_SAMPLES_PER_VOICE` only limits local storage.
