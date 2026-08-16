@@ -40,7 +40,7 @@ npm run register-commands
 npm run test:integration
 ```
 
-The integration command validates that the Discord token belongs to `DISCORD_CLIENT_ID`, that the guild is accessible, that every command is visible through Discord after registration, and that Fish returns non-empty synthesized audio. When a reference file is supplied it also creates a private Fish model and deletes it after synthesis. Set `FISH_TEST_OUTPUT_FILE` to retain the returned MP3 for an audible check. Voice receive, `/say` playback, and `/live` still require a human/test account in a voice channel; API credentials alone cannot originate Discord voice packets.
+The integration command validates that the Discord token belongs to `DISCORD_CLIENT_ID`, that the guild is accessible, that every command is visible through Discord after registration, and that Fish HTTP and realtime WebSocket TTS return non-empty audio and that realtime completion is an explicit finish(reason="stop"). When a reference file is supplied it also exercises Fish ASR, creates a private Fish model, and deletes it after synthesis. Set `FISH_TEST_OUTPUT_FILE` to retain the returned MP3 for an audible check. Voice receive, `/say` playback, and `/live` still require a human/test account in a voice channel; API credentials alone cannot originate Discord voice packets.
 
 Required configuration: `DISCORD_TOKEN`, `DISCORD_CLIENT_ID`, `DISCORD_GUILD_ID`, `FISH_API_KEY`, and `DATABASE_URL` (normally `file:/data/bot.db`); all remaining documented variables have safe defaults in `.env.example`. A Railway, Fly.io, Render, or equivalent service needs one continuously running Docker instance, outbound HTTPS/Discord UDP, and a persistent volume mounted at `/data`. Never use ephemeral storage for enrollment data. Back up the SQLite database and training directory consistently.
 
@@ -49,7 +49,7 @@ Required configuration: `DISCORD_TOKEN`, `DISCORD_CLIENT_ID`, `DISCORD_GUILD_ID`
 * **Voice receive:** verify Connect/Speak/View permissions, that the invoker is in voice, UDP egress works, and only enrolled target user IDs are subscribed. Packet loss and decoder errors must finalize/discard incomplete segments rather than mix users.
 * **FFmpeg:** run `ffmpeg -version`; the Docker image includes it. Spawn arguments are fixed arrays, never user shell strings.
 * **Fish:** verify quota, private-model entitlement, reference format/limits, API-key scope, and regional availability. A new model is never activated until test synthesis succeeds.
-* **Storage/privacy:** `/trainingdata prune` retains accepted and diverse high-score data; `/trainingdata clear` and `/unenroll` are destructive. Mount `/data`, cap storage/count/duration, and clean abandoned `/data/temp` files on every startup.
+* **Storage/privacy:** `/trainingdata prune` retains accepted and diverse high-score data; `/trainingdata clear` and `/unenroll` are destructive. Mount `/data`, enforces storage/count/duration caps, and clean abandoned `/data/temp` files on every startup.
 * **Security:** `.env` and audio are ignored, logs redact credentials, aliases/text are validated at command boundaries, generation length is capped, requests are rate-limited, filesystem names are generated, and no arbitrary path/URL/shell execution exists.
 
 Real Discord/Fish enrollment, capture, cloning, playback, and latency tests require secure credentials and human voice-channel participation; they are intentionally not simulated as successful when those credentials are absent.

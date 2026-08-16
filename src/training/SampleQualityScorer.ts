@@ -10,6 +10,6 @@ export class SampleQualityScorer {
     reasons.push(`${(f.speechRatio*100).toFixed(0)}% speech detected`);
     if(f.durationMs>=8000&&f.durationMs<=30000)reasons.push(`Good ${(f.durationMs/1000).toFixed(1)} second duration`);
     if(f.clippingRatio<.001)reasons.push('No clipping detected');else reasons.push(`${(f.clippingRatio*100).toFixed(2)}% clipped samples`);
-    return {...f,...base,capturedAt:base.capturedAt??Date.now(),qualityScore,reasons,exceptionalCandidate:qualityScore>=.9&&f.durationMs>=10000&&f.durationMs<=30000&&f.clippingRatio<.002&&f.speechRatio>.75,selectedForRebuild:false,isBestSample:false,active:true};
+    return {...f,...base,capturedAt:base.capturedAt??Date.now(),qualityScore,reasons,exceptionalCandidate:qualityScore>=.9&&f.durationMs>=10000&&f.durationMs<=30000&&f.clippingRatio<.002&&f.speechRatio>.75,selectedForRebuild:false,isBestSample:false,reviewStatus:'pending',active:true};
   }
 }
