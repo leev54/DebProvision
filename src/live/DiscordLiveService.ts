@@ -11,9 +11,24 @@ export class DiscordLiveService {
     const handler=(user:string)=>{if(user!==sourceUser||session.controller.signal.aborted)return;const began=Date.now(),sequence=session.sequence++;const opus=connection.receiver.subscribe(user,{end:{behavior:EndBehaviorType.AfterSilence,duration:350}});const decoder=new prism.opus.Decoder({rate:48_000,channels:2,frameSize:960});session.streams.add(opus);session.streams.add(decoder);const chunks:Buffer[]=[];let bytes=0;decoder.on('data',(b:Buffer)=>{bytes+=b.length;if(bytes<=this.maxUtteranceMs*48_000*2*2/1000)chunks.push(Buffer.from(b));else opus.destroy();});decoder.once('close',()=>{session.streams.delete(opus);session.streams.delete(decoder);});decoder.once('end',()=>{const pcm=Buffer.concat(chunks),completed=Date.now();session.tail=session.tail.then(()=>this.process(guild,session,pcm,began,completed,sequence));});opus.on('error',()=>decoder.destroy());opus.pipe(decoder);};
     connection.receiver.speaking.on('start',handler);session.detach=()=>connection.receiver.speaking.off('start',handler);this.sessions.set(guild,session);
   }
-  private async process(guild:string,session:Session,pcm:Buffer,began:number,completed:number,sequence:number){if(pcm.length<9600||session.controller.signal.aborted||Date.now()-completed>this.maxLagMs)return;try{const capture=completed-began;const asrAt=Date.now();const result=await this.transcription.transcribeWav(wavFromPcm(pcm),session.controller.signal);const asr=Date.now()-asrAt;if(!result.text||!session.pipeline.active||session.controller.signal.aborted)return;const queuedAt=Date.now();let firstAudioAt=0;
-    this.voice.enqueueStream(guild,`Live ${sequence}: ${result.text.slice(0,50)}`,async(stream,playbackSignal)=>{const playStartedAt=Date.now();if(playStartedAt-queuedAt>this.maxLagMs)throw new Error('Live utterance discarded because queued backlog became stale');const signal=AbortSignal.any([session.controller.signal,playbackSignal]);await this.fish.streamSynthesize({voiceId:session.pipeline.target(),text:result.text},async chunk=>{if(!firstAudioAt)firstAudioAt=Date.now();if(!stream.write(chunk))await new Promise<void>((resolve,reject)=>{stream.once('drain',resolve);stream.once('error',reject);signal.addEventListener('abort',()=>reject(signal.reason),{once:true});});},signal);const first=firstAudioAt||Date.now();session.pipeline.latency.record({capture,asr,queueWait:playStartedAt-queuedAt,ttsFirstAudio:first-playStartedAt,mouthToFirstAudio:first-began});},session.groupId);
-  }catch(err){if(!session.controller.signal.aborted)logger.error({err,guild},'live utterance failed');}}
+  private async process(guild:string,session:Session,pcm:Buffer,beganAt:number,completedAt:number,sequence:number){
+    const timing={beganAt,completedAt,asrStartedAt:0,asrFinishedAt:0,ttsQueuedAt:0,playbackStartedAt:0,firstAudioAt:0};
+    if(pcm.length<9600||session.controller.signal.aborted||Date.now()-timing.completedAt>this.maxLagMs)return;
+    try{
+      timing.asrStartedAt=Date.now();
+      const result=await this.transcription.transcribeWav(wavFromPcm(pcm),session.controller.signal);
+      timing.asrFinishedAt=Date.now();
+      if(!result.text||!session.pipeline.active||session.controller.signal.aborted||timing.asrFinishedAt-timing.completedAt>this.maxLagMs)return;
+      timing.ttsQueuedAt=Date.now();
+      this.voice.enqueueStream(guild,`Live ${sequence}: ${result.text.slice(0,50)}`,async(stream,playbackSignal)=>{
+        timing.playbackStartedAt=Date.now();
+        if(timing.playbackStartedAt-timing.completedAt>this.maxLagMs)throw new Error('Live utterance discarded because completed speech became stale before playback');
+        const signal=AbortSignal.any([session.controller.signal,playbackSignal]);
+        await this.fish.streamSynthesize({voiceId:session.pipeline.target(),text:result.text},async chunk=>{if(!timing.firstAudioAt)timing.firstAudioAt=Date.now();if(!stream.write(chunk))await new Promise<void>((resolve,reject)=>{stream.once('drain',resolve);stream.once('error',reject);signal.addEventListener('abort',()=>reject(signal.reason),{once:true});});},signal);
+        const first=timing.firstAudioAt||Date.now();session.pipeline.latency.record({capture:timing.completedAt-timing.beganAt,asr:timing.asrFinishedAt-timing.asrStartedAt,queueWait:timing.playbackStartedAt-timing.ttsQueuedAt,ttsFirstAudio:first-timing.playbackStartedAt,mouthToFirstAudio:first-timing.beganAt});
+      },session.groupId);
+    }catch(err){if(!session.controller.signal.aborted)logger.error({err,guild},'live utterance failed');}
+  }
   async stop(guild:string){const session=this.sessions.get(guild);if(!session)return false;session.detach();session.pipeline.stop();session.controller.abort();for(const stream of session.streams)stream.destroy();session.streams.clear();this.voice.cancelGroup(guild,session.groupId);await session.tail;this.sessions.delete(guild);return true;}
   async stopAll(){await Promise.all([...this.sessions.keys()].map(guild=>this.stop(guild)));}
   status(guild:string){return this.sessions.get(guild)?.pipeline;}switchVoice(guild:string,id:string,alias?:string){const p=this.status(guild);if(!p)return false;p.switchVoice(id,alias);return true;}
