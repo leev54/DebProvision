@@ -1,10 +1,30 @@
-import {EndBehaviorType,type VoiceConnection} from '@discordjs/voice';import prism from 'prism-media';import {mkdir,rm,writeFile} from 'node:fs/promises';import path from 'node:path';import {randomUUID} from 'node:crypto';import {wavFromPcm} from '../audio/wav.js';import {SampleFeatureExtractor} from '../training/SampleFeatureExtractor.js';import {SampleQualityScorer} from '../training/SampleQualityScorer.js';import type {ScoredSample} from '../training/types.js';import {logger} from '../utils/logger.js';
-type Destroyable={destroy:(error?:Error)=>void};
+import {EndBehaviorType,type VoiceConnection} from '@discordjs/voice';
+import prism from 'prism-media';
+import {mkdir,rm,writeFile} from 'node:fs/promises';
+import path from 'node:path';
+import {randomUUID} from 'node:crypto';
+import {wavFromPcm} from '../audio/wav.js';
+import {SampleFeatureExtractor} from '../training/SampleFeatureExtractor.js';
+import {SampleQualityScorer} from '../training/SampleQualityScorer.js';
+import type {ScoredSample} from '../training/types.js';
+import {logger} from '../utils/logger.js';
+type Finalizer={destroy:(error?:Error)=>void};
 export class VoiceCaptureService {
-  private listeners=new Map<string,()=>void>();private activeUsers=new Map<string,Set<string>>();private streams=new Map<string,Map<string,Set<Destroyable>>>();
-  constructor(private root='/data/training',private extractor=new SampleFeatureExtractor(),private scorer=new SampleQualityScorer(),private maxSegmentMs=30_000,private reserveStorage?:(bytes:number)=>Promise<void>){}
-  start(guild:string,connection:VoiceConnection,users:string[],onSample:(sample:ScoredSample)=>Promise<boolean|void>|boolean|void){this.stop(guild);this.activeUsers.set(guild,new Set(users));this.streams.set(guild,new Map());const handler=(userId:string)=>{if(!this.activeUsers.get(guild)?.has(userId))return;const opus=connection.receiver.subscribe(userId,{end:{behavior:EndBehaviorType.AfterSilence,duration:1000}});const decoder=new prism.opus.Decoder({rate:48_000,channels:2,frameSize:960});const set=this.streams.get(guild)?.get(userId)??new Set<Destroyable>();this.streams.get(guild)?.set(userId,set);set.add(opus);set.add(decoder);const chunks:Buffer[]=[];const timer=setTimeout(()=>opus.destroy(),this.maxSegmentMs);decoder.on('data',(chunk:Buffer)=>chunks.push(Buffer.from(chunk)));decoder.once('end',()=>void this.finish(guild,userId,chunks,onSample));decoder.once('close',()=>{clearTimeout(timer);set.delete(opus);set.delete(decoder);});opus.on('error',()=>decoder.destroy());opus.pipe(decoder);};connection.receiver.speaking.on('start',handler);this.listeners.set(guild,()=>connection.receiver.speaking.off('start',handler));}
-  stop(guild:string){this.listeners.get(guild)?.();this.listeners.delete(guild);this.activeUsers.delete(guild);for(const set of this.streams.get(guild)?.values()??[])for(const stream of set)stream.destroy();this.streams.delete(guild);}
-  removeUser(guild:string,user:string){this.activeUsers.get(guild)?.delete(user);for(const stream of this.streams.get(guild)?.get(user)??[])stream.destroy();this.streams.get(guild)?.delete(user);}
-  private async finish(guild:string,user:string,chunks:Buffer[],onSample:(s:ScoredSample)=>Promise<boolean|void>|boolean|void){const pcm=Buffer.concat(chunks);if(pcm.length<48_000*2*2*5||!this.activeUsers.get(guild)?.has(user))return;const id=randomUUID();const dir=path.join(this.root,guild,user);const file=path.join(dir,`${id}.wav`);try{const wav=wavFromPcm(pcm);await this.reserveStorage?.(wav.byteLength);if(!this.activeUsers.get(guild)?.has(user))return;await mkdir(dir,{recursive:true});await writeFile(file,wav);if(!this.activeUsers.get(guild)?.has(user)){await rm(file,{force:true});return;}const values=new Int16Array(pcm.buffer,pcm.byteOffset,Math.floor(pcm.byteLength/2));const sample=this.scorer.score(this.extractor.extract(values),{id,ownerId:user});sample.filePath=file;const accepted=await onSample(sample);if(accepted===false||!this.activeUsers.get(guild)?.has(user))await rm(file,{force:true});}catch(err){await rm(file,{force:true});logger.error({err,guild,user},'training capture could not be stored');}}
+  private listeners=new Map<string,()=>void>();private activeUsers=new Map<string,Set<string>>();private streams=new Map<string,Map<string,Set<Finalizer>>>();
+  constructor(private root='/data/training',private extractor=new SampleFeatureExtractor(),private scorer=new SampleQualityScorer(),private maxSegmentMs=30_000,private reserveStorage?:(bytes:number)=>Promise<(()=>void)|void>){}
+  start(guild:string,connection:VoiceConnection,users:string[],onSample:(sample:ScoredSample)=>Promise<boolean|void>|boolean|void){
+    this.stop(guild);this.activeUsers.set(guild,new Set(users));this.streams.set(guild,new Map());
+    const begin=(userId:string)=>{if(!this.activeUsers.get(guild)?.has(userId))return;const userStreams=this.streams.get(guild)?.get(userId)??new Set<Finalizer>();this.streams.get(guild)?.set(userId,userStreams);
+      const opus=connection.receiver.subscribe(userId,{end:{behavior:EndBehaviorType.AfterSilence,duration:1000}});const decoder=new prism.opus.Decoder({rate:48_000,channels:2,frameSize:960});const chunks:Buffer[]=[];let finalized=false;let continueAfterLimit=false;
+      const finalize=()=>{if(finalized)return;finalized=true;clearTimeout(timer);opus.unpipe(decoder);if(!opus.destroyed)opus.destroy();decoder.end();};const control={destroy:finalize};userStreams.add(control);
+      const timer=setTimeout(()=>{continueAfterLimit=true;finalize();},this.maxSegmentMs);decoder.on('data',(chunk:Buffer)=>chunks.push(Buffer.from(chunk)));
+      decoder.once('end',()=>void this.finish(guild,userId,chunks,onSample).finally(()=>{userStreams.delete(control);decoder.destroy();if(continueAfterLimit&&this.activeUsers.get(guild)?.has(userId))setImmediate(()=>begin(userId));}));
+      decoder.once('error',finalize);opus.once('error',finalize);opus.once('close',finalize);opus.pipe(decoder);
+    };
+    connection.receiver.speaking.on('start',begin);this.listeners.set(guild,()=>connection.receiver.speaking.off('start',begin));
+  }
+  stop(guild:string){this.listeners.get(guild)?.();this.listeners.delete(guild);for(const set of this.streams.get(guild)?.values()??[])for(const stream of [...set])stream.destroy();this.activeUsers.delete(guild);this.streams.delete(guild);}
+  stopAll(){for(const guild of [...this.listeners.keys()])this.stop(guild);}
+  removeUser(guild:string,user:string){for(const stream of [...(this.streams.get(guild)?.get(user)??[])])stream.destroy();this.activeUsers.get(guild)?.delete(user);this.streams.get(guild)?.delete(user);}
+  private async finish(guild:string,user:string,chunks:Buffer[],onSample:(s:ScoredSample)=>Promise<boolean|void>|boolean|void){const pcm=Buffer.concat(chunks);if(pcm.length<48_000*2*2*5)return;const id=randomUUID();const dir=path.join(this.root,guild,user);const file=path.join(dir,`${id}.wav`);let release:(()=>void)|undefined;try{const wav=wavFromPcm(pcm);const reserved=await this.reserveStorage?.(wav.byteLength);release=typeof reserved==='function'?reserved:undefined;if(!this.activeUsers.get(guild)?.has(user))return;await mkdir(dir,{recursive:true});await writeFile(file,wav);if(!this.activeUsers.get(guild)?.has(user)){await rm(file,{force:true});return;}const values=new Int16Array(pcm.buffer,pcm.byteOffset,Math.floor(pcm.byteLength/2));const sample=this.scorer.score(this.extractor.extract(values),{id,ownerId:user});sample.filePath=file;const accepted=await onSample(sample);if(accepted===false||!this.activeUsers.get(guild)?.has(user))await rm(file,{force:true});}catch(err){await rm(file,{force:true});logger.error({err,guild,user},'training capture could not be stored');}finally{release?.();}}
 }

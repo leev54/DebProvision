@@ -15,6 +15,7 @@ jobs:
       - run: npm ci
       - run: npm run lint
       - run: npm run typecheck
+      - run: npm run typecheck:test
       - run: npm test
       - run: npm run build
       - run: docker build -t debprovision:ci .

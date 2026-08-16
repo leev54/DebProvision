@@ -53,3 +53,9 @@ Required configuration: `DISCORD_TOKEN`, `DISCORD_CLIENT_ID`, `DISCORD_GUILD_ID`
 * **Security:** `.env` and audio are ignored, logs redact credentials, aliases/text are validated at command boundaries, generation length is capped, requests are rate-limited, filesystem names are generated, and no arbitrary path/URL/shell execution exists.
 
 Real Discord/Fish enrollment, capture, cloning, playback, and latency tests require secure credentials and human voice-channel participation; they are intentionally not simulated as successful when those credentials are absent.
+
+### Fish TTS model
+`FISH_TTS_MODEL` selects `s1`, `s2-pro`, `s2.1-pro`, or `s2.1-pro-free`.
+`s2.1-pro-free` is the free developer-tier option and the default. Fish model
+creation is independently capped at 20 curated references by
+`FISH_MAX_MODEL_REFERENCES`; `MAX_SAMPLES_PER_VOICE` only limits local storage.

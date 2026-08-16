@@ -9,7 +9,7 @@ import type {ScoredSample} from './training/types.js';
 
 const roots:string[]=[];
 afterEach(async()=>Promise.all(roots.splice(0).map(x=>rm(x,{recursive:true,force:true}))));
-const sample=(file:string):ScoredSample=>({id:'sample-1',ownerId:'user-1',filePath:file,durationMs:6000,capturedAt:1,qualityScore:.9,speechRatio:.8,silenceRatio:.2,rms:.1,peak:.5,clippingRatio:0,snrEstimate:25,reasons:['clean'],isBestSample:false,exceptionalCandidate:false,selectedForRebuild:false,active:true,continuity:.8});
+const sample=(file:string):ScoredSample=>({id:'sample-1',ownerId:'user-1',filePath:file,durationMs:6000,capturedAt:1,qualityScore:.9,speechRatio:.8,silenceRatio:.2,rms:.1,peak:.5,clippingRatio:0,snrEstimate:25,reasons:['clean'],isBestSample:false,exceptionalCandidate:false,selectedForRebuild:false,reviewStatus:'pending',active:true,continuity:.8});
 
 describe('production audio and persistence seams',()=>{
   it('creates a standards-compliant PCM WAV',()=>{const pcm=Buffer.alloc(48000*2*2);const wav=wavFromPcm(pcm);expect(wav.subarray(0,4).toString()).toBe('RIFF');expect(wav.subarray(8,12).toString()).toBe('WAVE');expect(wav.readUInt16LE(20)).toBe(1);expect(wav.readUInt32LE(24)).toBe(48000);expect(wav.readUInt32LE(40)).toBe(pcm.length);});
@@ -26,4 +26,12 @@ describe('Fish ASR and deployment configuration',()=>{
     try{await expect(new FishTranscriptionService('fish-key').transcribeWav(new Uint8Array([1,2]))).resolves.toEqual({text:'hello fish'});expect(request?.headers).toEqual({Authorization:'Bearer fish-key'});expect(request?.body).toBeInstanceOf(FormData);expect((request?.body as FormData).get('audio')).toBeInstanceOf(Blob);}finally{globalThis.fetch=original;}
   });
   it('starts from exactly the five required production settings',()=>{expect(loadConfig({DISCORD_TOKEN:'d',DISCORD_CLIENT_ID:'c',DISCORD_GUILD_ID:'g',FISH_API_KEY:'f',DATABASE_URL:'file:/data/bot.db'} as NodeJS.ProcessEnv).DATABASE_URL).toBe('file:/data/bot.db');});
+});
+
+import {binaryPlaybackInput} from './voice/DiscordVoiceRuntime.js';
+describe('binary playback input',()=>{
+  it('emits binary chunks rather than iterated byte numbers',async()=>{
+    const chunks:unknown[]=[];for await(const chunk of binaryPlaybackInput(new Uint8Array([1,2,255])))chunks.push(chunk);
+    expect(chunks).toHaveLength(1);expect(Buffer.isBuffer(chunks[0])||chunks[0] instanceof Uint8Array).toBe(true);expect(typeof chunks[0]).not.toBe('number');expect([...chunks[0] as Uint8Array]).toEqual([1,2,255]);
+  });
 });
