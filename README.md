@@ -31,6 +31,17 @@ npm run lint && npm run typecheck && npm test && npm run build
 docker compose up -d
 ```
 
+Before deployment, register and verify commands and exercise the real Fish API:
+
+```bash
+npm run register-commands
+# Set FISH_TEST_VOICE_ID to test an existing private voice, or
+# FISH_TEST_REFERENCE_FILE (+ optional transcript) to create, synthesize, and delete a test model.
+npm run test:integration
+```
+
+The integration command validates that the Discord token belongs to `DISCORD_CLIENT_ID`, that the guild is accessible, that every command is visible through Discord after registration, and that Fish returns non-empty synthesized audio. When a reference file is supplied it also creates a private Fish model and deletes it after synthesis. Set `FISH_TEST_OUTPUT_FILE` to retain the returned MP3 for an audible check. Voice receive, `/say` playback, and `/live` still require a human/test account in a voice channel; API credentials alone cannot originate Discord voice packets.
+
 Required secrets: `DISCORD_TOKEN`, `DISCORD_CLIENT_ID`, `DISCORD_GUILD_ID`, and `FISH_API_KEY`. `DATABASE_URL` defaults to `file:/data/bot.db`; all remaining documented variables have safe defaults in `.env.example`. A Railway, Fly.io, Render, or equivalent service needs one continuously running Docker instance, outbound HTTPS/Discord UDP, and a persistent volume mounted at `/data`. Never use ephemeral storage for enrollment data. Back up the SQLite database and training directory consistently.
 
 ## Operations and troubleshooting
