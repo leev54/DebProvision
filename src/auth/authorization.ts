@@ -1,0 +1,2 @@
+export class RateLimiter {private hits=new Map<string,number[]>();constructor(private limit=5,private windowMs=10_000){}allow(id:string,now=Date.now()){const a=(this.hits.get(id)??[]).filter(x=>now-x<this.windowMs);if(a.length>=this.limit){this.hits.set(id,a);return false;}a.push(now);this.hits.set(id,a);return true;}}
+export function isAdmin(memberRoles:string[],adminRole?:string){return !!adminRole&&memberRoles.includes(adminRole);}
