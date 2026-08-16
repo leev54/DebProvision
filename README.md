@@ -16,7 +16,7 @@ Live conversion is **Discord Opus → Fish ASR → Fish realtime TTS → Discord
 
 Pending samples enter automatic model curation only at or above `MODEL_SAMPLE_MIN_SCORE`; manually accepted samples remain usable below that threshold, while rejected and inactive samples are never used. `FISH_MAX_MODEL_REFERENCES` is capped at 20 and `MAX_SELECTED_TRAINING_DURATION_SECONDS` caps selected reference duration. `AUTO_KEEP_BEST_SAMPLE` protects only the current pending best candidate from automatic eviction; it does not accept the sample.
 
-Fish HTTP and realtime selection are independent. `FISH_TTS_MODEL` and `FISH_REALTIME_MODEL` currently accept `s1`, `s2-pro`, `s2.1-pro`, and `s2.1-pro-free`, matching Fish Audio's current [REST OpenAPI](https://api.fish.audio/openapi.json) and [WebSocket TTS documentation](https://docs.fish.audio/api-reference/endpoint/websocket/tts-live). Realtime success requires non-empty audio followed by `finish(reason="stop")`. TTS speed is validated as 0.5 through 2.0 before Fish requests.
+Fish HTTP and realtime selection are independent. `FISH_TTS_MODEL` accepts `s1`, `s2-pro`, `s2.1-pro`, and `s2.1-pro-free` (default `s2.1-pro-free`). Independently, `FISH_REALTIME_MODEL` accepts only the WebSocket-documented `s1` and `s2-pro` values (default `s2-pro`). Realtime success requires non-empty audio followed by `finish(reason="stop")`. TTS speed is validated as 0.5 through 2.0 before Fish requests.
 
 ## Setup and operation
 

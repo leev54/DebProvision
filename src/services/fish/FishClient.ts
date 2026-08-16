@@ -6,7 +6,7 @@ import type { VoiceProvider,VoiceReference } from './VoiceProvider.js';
 export class FishApiError extends Error {constructor(message:string,readonly status:number|undefined,readonly retryable:boolean,readonly diagnostic?:string){super(message);this.name='FishApiError';}}
 
 export class FishClient implements VoiceProvider {
-  constructor(private apiKey:string,private base='https://api.fish.audio',private timeoutMs=60_000,private ttsModel:'s1'|'s2-pro'|'s2.1-pro'|'s2.1-pro-free'='s2.1-pro-free',private realtimeModel:'s1'|'s2-pro'|'s2.1-pro'|'s2.1-pro-free'='s2.1-pro-free'){}
+  constructor(private apiKey:string,private base='https://api.fish.audio',private timeoutMs=60_000,private ttsModel:'s1'|'s2-pro'|'s2.1-pro'|'s2.1-pro-free'='s2.1-pro-free',private realtimeModel:'s1'|'s2-pro'='s2-pro'){}
   private headers(extra:HeadersInit={}){return {Authorization:`Bearer ${this.apiKey}`,...extra};}
   private async request(url:string,init:RequestInit,operation:string){
     const res=await fetch(url,{...init,signal:AbortSignal.timeout(this.timeoutMs)});
