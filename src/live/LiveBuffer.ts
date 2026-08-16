@@ -1,0 +1,2 @@
+export interface LiveChunk<T>{value:T;createdAt:number}
+export class LiveBuffer<T>{private q:LiveChunk<T>[]=[];constructor(private maxLagMs:number){}push(value:T,now=Date.now()){this.q.push({value,createdAt:now});this.dropStale(now);}shift(now=Date.now()){this.dropStale(now);return this.q.shift();}dropStale(now=Date.now()){const n=this.q.length;this.q=this.q.filter(x=>now-x.createdAt<=this.maxLagMs);return n-this.q.length;}get length(){return this.q.length;}}

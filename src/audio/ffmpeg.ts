@@ -1,0 +1,2 @@
+import { spawn } from 'node:child_process';
+export function ffmpeg(args:string[],input?:NodeJS.ReadableStream){const child=spawn('ffmpeg',['-nostdin','-hide_banner','-loglevel','error',...args],{stdio:['pipe','ignore','pipe']});input?.pipe(child.stdin);let error='';child.stderr.on('data',d=>error+=String(d));return new Promise<void>((resolve,reject)=>child.on('close',c=>c===0?resolve():reject(new Error(`FFmpeg failed (${c}): ${error.slice(0,500)}`))));}
