@@ -6,10 +6,10 @@ import type { VoiceProvider,VoiceReference } from './VoiceProvider.js';
 export class FishApiError extends Error {constructor(message:string,readonly status:number|undefined,readonly retryable:boolean,readonly diagnostic?:string){super(message);this.name='FishApiError';}}
 
 export class FishClient implements VoiceProvider {
-  constructor(private apiKey:string,private base='https://api.fish.audio',private timeoutMs=60_000,private ttsModel:'s1'|'s2-pro'|'s2.1-pro'|'s2.1-pro-free'='s2.1-pro-free',private realtimeModel:'s1'|'s2-pro'='s2-pro'){}
+  constructor(private apiKey:string,private base='https://api.fish.audio',private timeoutMs=60_000,private ttsModel:'s1'|'s2-pro'|'s2.1-pro'|'s2.1-pro-free'='s2.1-pro-free',private realtimeModel:'s1'|'s2-pro'|'s2.1-pro'|'s2.1-pro-free'='s2-pro'){}
   private headers(extra:HeadersInit={}){return {Authorization:`Bearer ${this.apiKey}`,...extra};}
   private async request(url:string,init:RequestInit,operation:string){
-    const res=await fetch(url,{...init,signal:AbortSignal.timeout(this.timeoutMs)});
+    let res:Response;try{res=await fetch(url,{...init,signal:init.signal?AbortSignal.any([init.signal,AbortSignal.timeout(this.timeoutMs)]):AbortSignal.timeout(this.timeoutMs)});}catch{if(init.signal?.aborted)throw init.signal.reason;throw new FishApiError(`${operation} transport failed`,undefined,true);}
     if(!res.ok){const detail=(await res.text()).replace(/\s+/g,' ').slice(0,500);throw new FishApiError(`${operation} failed (${res.status})`,res.status,res.status===429||res.status>=500,detail||undefined);}
     return res;
   }
@@ -24,9 +24,9 @@ export class FishClient implements VoiceProvider {
     const res=await this.request(`${this.base}/model`,{method:'POST',headers:this.headers(),body:form},'Fish model creation');
     const body=await res.json() as {id?:string;_id?:string};const id=body.id??body._id;if(!id)throw new Error('Fish returned no model ID');return {id};
   }
-  async synthesize(i:{voiceId:string;text:string;speed?:number}){
+  async synthesize(i:{voiceId:string;text:string;speed?:number;signal?:AbortSignal}){
     if(i.speed!==undefined&&(i.speed<.5||i.speed>2))throw new Error('Fish TTS speed must be between 0.5 and 2.0');
-    const res=await this.request(`${this.base}/v1/tts`,{method:'POST',headers:this.headers({'Content-Type':'application/json',model:this.ttsModel}),body:JSON.stringify({text:i.text,reference_id:i.voiceId,format:'mp3',latency:'balanced',prosody:{speed:i.speed??1}})},'Fish TTS');
+    const res=await this.request(`${this.base}/v1/tts`,{method:'POST',headers:this.headers({'Content-Type':'application/json',model:this.ttsModel}),body:JSON.stringify({text:i.text,reference_id:i.voiceId,format:'mp3',latency:'balanced',prosody:{speed:i.speed??1}}),signal:i.signal},'Fish TTS');
     const bytes=new Uint8Array(await res.arrayBuffer());if(!bytes.length)throw new Error('Fish TTS returned empty audio');return bytes;
   }
   async streamSynthesize(i:{voiceId:string;text:string;speed?:number},onAudio:(chunk:Uint8Array)=>Promise<void>|void,signal?:AbortSignal){

@@ -29,7 +29,7 @@ export class DiscordLiveService {
       const result=await this.transcription.transcribeWav(wavFromPcm(pcm),asrSignal);timing.asrFinishedAt=Date.now();
       if(!result.text||!session.pipeline.active||session.controller.signal.aborted||remaining()<=0)return;
       timing.ttsQueuedAt=Date.now();
-      this.voice.enqueueStream(guild,`Live ${sequence}: ${result.text.slice(0,50)}`,async(stream,playbackSignal)=>{
+      this.voice.enqueueStream(guild,`Live utterance ${sequence}`,async(stream,playbackSignal)=>{
         timing.playbackStartedAt=Date.now();if(remaining()<=0)throw new Error('Live utterance discarded because completed speech became stale before playback');
         const freshness=new AbortController();const timer=setTimeout(()=>freshness.abort(new DOMException('Live first-audio deadline exceeded','TimeoutError')),Math.max(1,remaining()));const signal=AbortSignal.any([session.controller.signal,playbackSignal,freshness.signal]);
         try{await this.fish.streamSynthesize({voiceId:session.pipeline.target(),text:result.text},async chunk=>{if(!timing.firstAudioAt){timing.firstAudioAt=Date.now();clearTimeout(timer);if(timing.firstAudioAt>deadline)throw new DOMException('Live first-audio deadline exceeded','TimeoutError');}if(!stream.write(chunk))await new Promise<void>((resolve,reject)=>{stream.once('drain',resolve);stream.once('error',reject);signal.addEventListener('abort',()=>reject(signal.reason),{once:true});});},signal);}finally{clearTimeout(timer);}

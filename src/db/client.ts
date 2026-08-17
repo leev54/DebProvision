@@ -12,9 +12,9 @@ export function openDatabase(file:string){
   if(!columns.some(c=>c.name==='review_status')){db.exec("ALTER TABLE samples ADD COLUMN review_status TEXT NOT NULL DEFAULT 'pending' CHECK(review_status IN ('pending','accepted','rejected'))");db.exec("UPDATE samples SET review_status='accepted' WHERE selected=1");columns=db.prepare('PRAGMA table_info(samples)').all() as {name:string}[];}
   // Remove the legacy overlap column rather than continuing to store a fabricated value.
   if(columns.some(c=>c.name==='overlap_estimate'))db.transaction(()=>{db.exec(`ALTER TABLE samples RENAME TO samples_legacy;${samplesSchema};INSERT INTO samples(id,guild_id,voice_owner_id,file_path,duration_ms,captured_at,transcript,quality_score,speech_ratio,rms,peak,clipping_ratio,snr_estimate,reasons,is_best,exceptional,selected,review_status,active) SELECT id,guild_id,voice_owner_id,file_path,duration_ms,captured_at,transcript,quality_score,speech_ratio,rms,peak,clipping_ratio,snr_estimate,reasons,is_best,exceptional,selected,review_status,active FROM samples_legacy;DROP TABLE samples_legacy`);})();
-  db.exec('CREATE TABLE IF NOT EXISTS pending_provider_deletions(remote_id TEXT PRIMARY KEY,attempts INTEGER NOT NULL DEFAULT 0,last_error TEXT,next_retry_at INTEGER NOT NULL,created_at INTEGER NOT NULL,retryable INTEGER NOT NULL DEFAULT 1)');
+  db.exec('CREATE TABLE IF NOT EXISTS staged_provider_models(remote_id TEXT PRIMARY KEY,created_at INTEGER NOT NULL);CREATE TABLE IF NOT EXISTS pending_provider_deletions(remote_id TEXT PRIMARY KEY,attempts INTEGER NOT NULL DEFAULT 0,last_error TEXT,next_retry_at INTEGER NOT NULL,created_at INTEGER NOT NULL,retryable INTEGER NOT NULL DEFAULT 1)');
   const deletionColumns=db.prepare('PRAGMA table_info(pending_provider_deletions)').all() as {name:string}[];if(!deletionColumns.some(c=>c.name==='retryable'))db.exec('ALTER TABLE pending_provider_deletions ADD COLUMN retryable INTEGER NOT NULL DEFAULT 1');
-  db.exec('DROP TABLE IF EXISTS enrollments');
+  db.exec('DROP TABLE IF EXISTS enrollments');db.exec('DROP TABLE IF EXISTS generations');
   return db;
 }
 export type DB=ReturnType<typeof openDatabase>;

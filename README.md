@@ -8,7 +8,7 @@ All commands and component interactions work only in the configured `BOT_COMMAND
 
 No `/enroll` step is required. `/deletedata` deletes the invoking user's stored samples, review records, managed WAV files, voice/profile metadata, and remote Fish model in that guild. Remote deletion uses a durable cleanup outbox, so retryable Fish failures remain scheduled and permanent authentication/configuration failures remain recorded for operator diagnosis. Fish provider IDs may exist in internal cleanup records and structured logs, but are never included in Discord responses. `/deletevoice` remains a narrower operation that resets one owned voice while leaving other usable bot data in place.
 
-`/train start users:@user` records only the explicitly selected Discord user IDs, with a separate receive stream per user. It never records the bot, unrelated members, or everybody in a voice channel. Training segments shorter than `MIN_TRAINING_SEGMENT_SECONDS` are discarded (default: 2 seconds); this is independent of best-sample eligibility. `/train stop` reports measured quality and review controls but never publicly attaches raw training WAVs. An owner can privately inspect a pending candidate with `/bestsample show`.
+`/train start users:@user` records at most `MAX_TRAINING_TARGETS` (default 8) explicitly selected non-bot guild members who are currently in the same voice channel. It records only the explicitly selected Discord user IDs, with a separate receive stream per user. It never records the bot, unrelated members, or everybody in a voice channel. Training segments shorter than `MIN_TRAINING_SEGMENT_SECONDS` are discarded (default: 2 seconds); this is independent of best-sample eligibility. `/train stop` reports measured quality and review controls but never publicly attaches raw training WAVs. An owner can privately inspect a pending candidate with `/bestsample show`.
 
 ## Audio and model behavior
 
@@ -16,7 +16,7 @@ Live conversion is **Discord Opus → Fish ASR → Fish realtime TTS → Discord
 
 Pending samples enter automatic model curation only at or above `MODEL_SAMPLE_MIN_SCORE`; manually accepted samples remain usable below that threshold, while rejected and inactive samples are never used. `FISH_MAX_MODEL_REFERENCES` is capped at 20 and `MAX_SELECTED_TRAINING_DURATION_SECONDS` caps selected reference duration. `AUTO_KEEP_BEST_SAMPLE` protects only the current pending best candidate from automatic eviction; it does not accept the sample.
 
-Fish HTTP and realtime selection are independent. `FISH_TTS_MODEL` accepts `s1`, `s2-pro`, `s2.1-pro`, and `s2.1-pro-free` (default `s2.1-pro-free`). Independently, `FISH_REALTIME_MODEL` accepts only the WebSocket-documented `s1` and `s2-pro` values (default `s2-pro`). Realtime success requires non-empty audio followed by `finish(reason="stop")`. TTS speed is validated as 0.5 through 2.0 before Fish requests.
+Fish HTTP and realtime selection are independent. `FISH_TTS_MODEL` accepts `s1`, `s2-pro`, `s2.1-pro`, and `s2.1-pro-free` (default `s2.1-pro-free`). Independently, `FISH_REALTIME_MODEL` accepts `s1`, `s2-pro`, `s2.1-pro`, and `s2.1-pro-free` (default `s2-pro`). Realtime success requires non-empty audio followed by `finish(reason="stop")`. TTS speed is validated as 0.5 through 2.0 before Fish requests.
 
 ## Setup and operation
 
@@ -40,7 +40,15 @@ At startup the bot parses configuration, completes SQLite migrations, reconciles
 ```bash
 # FISH_TEST_VOICE_ID tests an existing private voice, or
 # FISH_TEST_REFERENCE_FILE (+ optional FISH_TEST_REFERENCE_TEXT) creates a temporary private voice.
-npm run test:integration
+FISH_TEST_DATABASE_URL=file:/data/fish-smoke.db npm run test:integration
 ```
 
-With real credentials, the script verifies Discord authentication, application ID, configured guild and command registration; Fish ASR non-empty text; HTTP TTS with `FISH_TTS_MODEL`; realtime audio and `finish(reason="stop")` with `FISH_REALTIME_MODEL`; temporary private voice creation; and durable deletion. It does not fake Discord voice receive. End-to-end Discord UDP/Opus receive, ASR, realtime synthesis, and playback still require Fish credentials plus a human/test account in a real Discord voice channel.
+With real credentials, the script verifies Discord authentication, application ID, configured guild, control channel, and command registration. ASR is verified only when `FISH_TEST_REFERENCE_FILE` is supplied. With `FISH_TEST_VOICE_ID`, HTTP TTS with `FISH_TTS_MODEL`; realtime audio and `finish(reason="stop")` with `FISH_REALTIME_MODEL`; temporary private voice creation when reference audio is supplied; and durable deletion using isolated `FISH_TEST_DATABASE_URL`. It does not fake Discord voice receive. End-to-end Discord UDP/Opus receive, ASR, realtime synthesis, and playback still require Fish credentials plus a human/test account in a real Discord voice channel.
+
+## Operator and deployment model
+
+Everyone whom Discord permits to use the dedicated `BOT_COMMAND_CHANNEL_ID` is a trusted operator for shared operations such as `/say`, `/live`, and model rebuilds. Owner-only inspection, rename, review, and deletion operations remain owner-restricted. `/train start` performs only practical capture validation: targets are deduplicated guild members, must be non-bot users in the invoker's voice channel, and are capped by `MAX_TRAINING_TARGETS` (default 8). Profiles are created lazily after the complete target list passes validation; no enrollment, role allowlist, or per-target text-channel permission system exists.
+
+Playback labels and normal logs contain request metadata and character counts, never raw `/say` text or ASR transcripts. Deleted managed WAVs are tombstoned immediately and retried by a periodic managed-storage reconciler without waiting for restart.
+
+For Railway, mount a persistent volume at `/data`, set `DATABASE_URL=file:/data/bot.db`, and keep `MAX_TRAINING_STORAGE_MB` below volume capacity with a safety margin. Supply Discord/Fish secrets and `BOT_COMMAND_CHANNEL_ID`. The image normally runs as UID 10001; if the mounted volume is not writable by that UID, Railway may require `RAILWAY_RUN_UID=0`. Configure a nonzero `RAILWAY_DEPLOYMENT_DRAINING_SECONDS` long enough for Fish requests and runtime cleanup to drain. CI cannot prove mounted-volume ownership. Discord voice receive is not a formally stable public receive API, so real Fish credentials and human Discord voice traffic remain required for end-to-end runtime validation.
