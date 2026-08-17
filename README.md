@@ -1,70 +1,47 @@
-# Discord Fish Voice Bot
+# DebProvision
 
-A persistent, privacy-focused Discord voice bot that captures isolated Discord speakers, scores and curates managed training WAV files, builds private Fish Audio voices, and provides HTTP or realtime TTS playback. Generated text is not persisted.
+A single-guild Discord voice bot backed by Fish Audio and persistent SQLite storage. It captures isolated training WAV samples, curates them using measured quality, builds replacement Fish voice models safely, and provides queued `/say` playback.
 
-## Discord control and privacy
+## Configuration
 
-Commands and component interactions work in any text channel inside `DISCORD_GUILD_ID` where Discord permissions allow members to invoke the bot. Interactions from every other guild are rejected. The bot adds no enrollment, owner-only authorization, role allowlist, or per-channel/per-target authorization.
+Copy `.env.example` and set the required values:
 
-No `/enroll` step is required. `/deletedata user:@Target` deletes the selected user's stored samples, review records, managed WAV files, voice/profile metadata, and remote Fish model in that guild. Remote deletion uses a durable cleanup outbox, so retryable Fish failures remain scheduled and permanent authentication/configuration failures remain recorded for operator diagnosis. Fish provider IDs may exist in internal cleanup records and structured logs, but are never included in Discord responses. `/deletevoice user:@Target` remains a narrower operation that resets the selected voice while leaving other usable bot data in place.
+- `DISCORD_TOKEN`, `DISCORD_CLIENT_ID`, and `DISCORD_GUILD_ID` identify the Discord bot and its one guild.
+- `ADMIN_USER_ID` is the exact Discord snowflake of the one bot administrator. Discord roles and Discord's Administrator permission do not grant this access.
+- `COMMAND_CHANNEL_ID` is the exact snowflake of the one text channel in which every command is allowed.
+- `FISH_API_KEY` configures Fish Audio.
+- `DATABASE_URL` must be a persistent `file:` URL (Railway should use `file:/data/bot.db`).
 
-`/train start users:@user` records at most `MAX_TRAINING_TARGETS` (default 8) explicitly selected non-bot guild members who are currently in the same voice channel. It records only the explicitly selected Discord user IDs, with a separate receive stream per user. It never records the bot, unrelated members, or everybody in a voice channel. Training segments shorter than `MIN_TRAINING_SEGMENT_SECONDS` are discarded (default: 2 seconds); this is independent of best-sample eligibility. `/train stop` reports measured quality and review controls but never publicly attaches raw training WAVs. Any guild operator can publicly inspect a pending candidate with `/bestsample show user:@Target` and accept or reject it.
+All commands reject interactions outside the configured guild or command channel. Normal members may use ordinary commands in that channel. `/deletedata`, `/deletevoice`, `/pause`, and `/start` are restricted to `ADMIN_USER_ID`.
 
-## Audio and model behavior
+## Commands
 
-Live conversion is **Discord Opus → Fish ASR → Fish realtime TTS → Discord playback**. `MAX_LIVE_LAG_MS` is the deadline from completed utterance to first synthesized audio: capture duration is excluded, stale ASR is aborted, queue-stale work is dropped, and first-audio timeout cancels realtime generation without cutting off healthy synthesis after audio begins. Receive and playback failures are isolated so later queue items can continue.
+Training and playback commands are `/train start|stop|status|rebuild|rebuild-all`, `/trainingdata status|clear|prune`, `/bestsample show|accept|reject|history`, `/say`, `/voices`, `/voiceinfo`, `/join`, `/leave`, `/stop`, `/skip`, and `/queue`.
 
-Pending samples enter automatic model curation only at or above `MODEL_SAMPLE_MIN_SCORE`; manually accepted samples remain usable below that threshold, while rejected and inactive samples are never used. `FISH_MAX_MODEL_REFERENCES` is capped at 20 and `MAX_SELECTED_TRAINING_DURATION_SECONDS` caps selected reference duration. `AUTO_KEEP_BEST_SAMPLE` protects only the current pending best candidate from automatic eviction; it does not accept the sample.
+Administrative controls:
 
-Fish HTTP and realtime selection are independent. `FISH_TTS_MODEL` accepts `s1`, `s2-pro`, `s2.1-pro`, and `s2.1-pro-free` (default `s2.1-pro-free`). Independently, `FISH_REALTIME_MODEL` accepts only `s1` and `s2-pro` (default `s2-pro`). Realtime success requires non-empty audio followed by `finish(reason="stop")`. TTS speed is validated as 0.5 through 2.0 before Fish requests.
+- `/pause` persists a paused state, cancels/drains capture and playback through the normal lifecycle, and leaves Discord connected.
+- `/start` clears that persisted state. It is the only command accepted while paused.
+- `/diagnostics` reports bot/Discord/SQLite/Fish status, uptime, storage and free space, cleanup queues, active training, voice count, backup state, and safe error information. It never includes tokens, API keys, request text, transcripts, or connection strings.
 
-## Setup and operation
+The paused state lives in SQLite and therefore survives process restarts, Railway restarts, and redeploys when `/data` is mounted persistently.
 
-Required settings are `DISCORD_TOKEN`, `DISCORD_CLIENT_ID`, `DISCORD_GUILD_ID`, `FISH_API_KEY`, and `DATABASE_URL` (normally `file:/data/bot.db`). Store secrets in a secret manager; Fish authorization headers are never logged. Mount persistent storage at `/data` and back up the SQLite database and training directory consistently.
+## Dataset readiness
 
-1. Create a Discord application and bot without privileged intents.
-2. Invite it with `bot applications.commands` and **View Channels, Send Messages, Connect, Speak, Attach Files** permissions. Use ordinary Discord channel permissions to choose where members can invoke it.
-3. Configure `.env`, start the service, then use `/train start users:@user`, `/train stop`, `/bestsample`, `/train rebuild`, `/say`, and `/live` from any permitted guild text channel.
+Samples retain the existing score, review state, Fish reference-count limit, and selected-duration rules. As qualifying samples arrive, DebProvision fingerprints the eligible dataset and marks the model **rebuild ready** in `/trainingdata status`. A successful existing rebuild records that exact fingerprint. The same unchanged dataset is not marked as a new rebuild again; a changed qualifying dataset becomes ready. Rebuild execution remains explicit so provider staging, replacement coordination, and durable deletion guarantees are preserved.
 
-```bash
-cp .env.example .env
-npm ci
-npm run lint && npm run typecheck && npm run typecheck:test && npm test && npm run build
-docker compose up -d
-```
+## Backups
 
-At startup the bot parses configuration, completes SQLite migrations and managed-storage reconciliation, authenticates Discord, validates the configured guild, registers commands, then enables cleanup workers and interaction processing. Reconciliation removes only project-generated orphan WAV paths, preserves referenced WAVs, and deactivates active rows whose managed files are missing. Shutdown rejects new interactions, drains already-running interactions, then drains capture/live/playback/provider cleanup, destroys Discord, and closes SQLite last.
+`BACKUP_INTERVAL_MINUTES` (default `1440`), `BACKUP_RETENTION_COUNT` (default `7`), and `BACKUP_DIRECTORY` (default `/data/backups`) control automatic local snapshots. SQLite's online backup API creates a consistent database snapshot; managed training WAVs and a restore manifest are stored beside it in an atomically published directory. Failed backups are logged and recorded for `/diagnostics` without stopping the bot. Retention deletes only older completed backup directories.
 
-## Credential-dependent integration smoke
+Backups remain on the mounted persistent volume. No external backup destination is integrated because the project has no external-storage credentials; diagnostics makes this explicit. For disaster recovery outside Railway's volume, operators should copy completed backup directories to storage they control. Backups contain bot state and managed audio, but no environment secrets.
 
-```bash
-# FISH_TEST_VOICE_ID tests an existing private voice, or
-# FISH_TEST_REFERENCE_FILE (+ optional FISH_TEST_REFERENCE_TEXT) creates a temporary private voice.
-FISH_TEST_DATABASE_URL=file:/data/fish-smoke.db npm run test:integration
-```
+## Railway and operation
 
-With real credentials, the script verifies Discord authentication, application ID, configured guild and command registration. ASR is verified only when `FISH_TEST_REFERENCE_FILE` is supplied. With `FISH_TEST_VOICE_ID`, HTTP TTS with `FISH_TTS_MODEL`; realtime audio and `finish(reason="stop")` with `FISH_REALTIME_MODEL`; temporary private voice creation when reference audio is supplied; and durable deletion using isolated `FISH_TEST_DATABASE_URL`. It does not fake Discord voice receive. End-to-end Discord UDP/Opus receive, ASR, realtime synthesis, and playback still require Fish credentials plus a human/test account in a real Discord voice channel.
+Deploy the `Dockerfile` as one replica and mount a persistent volume at `/data`. Configure every required variable above in Railway. Startup performs migrations and storage reconciliation before accepting commands. Graceful shutdown drains interactions, capture, playback, backup work, and cleanup workers before Discord and SQLite close.
 
-## Operator and deployment model
+Run locally with `npm ci`, then `npm run dev`. Register commands separately with `npm run register-commands` if needed; normal production startup also registers the exact guild command set.
 
-Every member whom Discord permits to invoke commands in the configured guild is a trusted operator. Commands select stored voices and data with Discord user options, use immutable Discord user IDs internally, and may manage any bot-managed guild user. Normal command responses are public. `/renamevoice` is intentionally not exposed. `/train start` performs only practical capture validation: targets are deduplicated guild members, must be non-bot users in the invoker's voice channel, and are capped by `MAX_TRAINING_TARGETS` (default 8). Profiles are created lazily after the complete target list passes validation; no enrollment, role allowlist, or per-target text-channel permission system exists.
+## Validation
 
-Playback labels and normal logs contain request metadata and character counts, never raw `/say` text or ASR transcripts. Deleted personal sample/review metadata is removed transactionally; only path-safe WAV cleanup work remains in a durable minimal outbox and is retried periodically without waiting for restart.
-
-For Railway, mount a persistent volume at `/data`, set `DATABASE_URL=file:/data/bot.db`, and keep `MAX_TRAINING_STORAGE_MB` below volume capacity with a safety margin. Supply the Discord and Fish secrets. The image normally runs as UID 10001; if the mounted volume is not writable by that UID, Railway may require `RAILWAY_RUN_UID=0`. Configure a nonzero `RAILWAY_DEPLOYMENT_DRAINING_SECONDS` long enough for Fish requests and runtime cleanup to drain. CI cannot prove mounted-volume ownership. Discord voice receive is not a formally stable public receive API, so real Fish credentials and human Discord voice traffic remain required for end-to-end runtime validation.
-
-### Runtime lifecycle notes
-
-Startup authenticates Discord and validates the configured guild before command registration, background cleanup workers, or interaction acceptance are enabled. A failed startup explicitly drains initialized services, destroys Discord, and closes SQLite. HTTP Fish operations use `FISH_HTTP_TIMEOUT_MS`, ASR uses `FISH_ASR_TIMEOUT_MS`, and realtime WebSocket synthesis uses `FISH_REALTIME_TIMEOUT_MS`.
-
-Privacy deletion removes personal sample/review metadata transactionally and places only managed WAV paths in a minimal durable local-cleanup outbox. Physical deletion is path-validated and retried periodically. Files still being admitted are protected from reconciliation until repository admission completes.
-
-Run exactly one bot replica against a given SQLite database and Discord bot token. Do not use overlapping Railway replicas against the same `/data/bot.db`; multi-instance operation requires a different coordination/storage architecture.
-
-Fish model creation and SQLite staging cannot form a distributed transaction. If the process dies after Fish creates a model but before Fish returns/persists its ID, that remote resource cannot be recovered safely without a provider idempotency or scoped reconciliation API.
-
-### Durable cleanup and concurrency notes
-
-SQLite is the single-replica coordination source. Personal sample deletion records managed WAV paths in a local-file cleanup outbox before metadata is removed; orphan reconciliation excludes those owned paths and the periodic worker retries them without bypassing backoff. Provider deletion intents created by model replacement or destructive commands begin held, are armed only after live runtime coordination, and become recoverable after a crash-recovery grace period. Live model switches cancel only that live session's playback group, leaving unrelated `/say` playback intact. `/trainingdata clear` and `prune` require training to be stopped. Files attached or uploaded as model references must resolve under the generated managed-training namespace; external and symlink-escaped paths are quarantined and never deleted. Fish model creation necessarily has a small distributed-system window between Fish returning an ID and the first successful local staging write; if SQLite staging fails while the process remains alive, direct best-effort Fish deletion is attempted.
-
-Provider cleanup rows created by destructive or replacement transactions remain held until runtime users have stopped or switched; `armAndAttempt` is the only immediate destructive path, while crash-abandoned holds become eligible after the recovery grace period. Model-scoped `/say` generations and queued audio are cancelled before deleting that model. Live group cancellation is awaitable, so an old realtime producer fully exits before its provider model is deleted, without disturbing unrelated playback. Permanently unsafe local cleanup paths are quarantined for operator diagnosis rather than retried or deleted; periodic cleanup logs only aggregate failure counts.
+Use `npm run lint`, `npm run typecheck`, `npm run typecheck:test`, `npm test`, `npm run build`, and `docker build -t debprovision:validation .`.
