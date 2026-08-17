@@ -4,11 +4,11 @@ A persistent, privacy-focused Discord voice bot that captures isolated Discord s
 
 ## Discord control and privacy
 
-All commands and component interactions work only in the configured `BOT_COMMAND_CHANNEL_ID` inside `DISCORD_GUILD_ID`. Discord's normal channel permissions determine who can access that channel; the bot adds no enrollment, auto-enrollment, role synchronization, or secondary user allowlist. Administrators cannot bypass the configured text-channel boundary. The text control channel and the Discord voice channel may be different.
+Commands and component interactions work in any text channel inside `DISCORD_GUILD_ID` where Discord permissions allow members to invoke the bot. Interactions from every other guild are rejected. The bot adds no enrollment, owner-only authorization, role allowlist, or per-channel/per-target authorization.
 
-No `/enroll` step is required. `/deletedata` deletes the invoking user's stored samples, review records, managed WAV files, voice/profile metadata, and remote Fish model in that guild. Remote deletion uses a durable cleanup outbox, so retryable Fish failures remain scheduled and permanent authentication/configuration failures remain recorded for operator diagnosis. Fish provider IDs may exist in internal cleanup records and structured logs, but are never included in Discord responses. `/deletevoice` remains a narrower operation that resets one owned voice while leaving other usable bot data in place.
+No `/enroll` step is required. `/deletedata user:@Target` deletes the selected user's stored samples, review records, managed WAV files, voice/profile metadata, and remote Fish model in that guild. Remote deletion uses a durable cleanup outbox, so retryable Fish failures remain scheduled and permanent authentication/configuration failures remain recorded for operator diagnosis. Fish provider IDs may exist in internal cleanup records and structured logs, but are never included in Discord responses. `/deletevoice user:@Target` remains a narrower operation that resets the selected voice while leaving other usable bot data in place.
 
-`/train start users:@user` records at most `MAX_TRAINING_TARGETS` (default 8) explicitly selected non-bot guild members who are currently in the same voice channel. It records only the explicitly selected Discord user IDs, with a separate receive stream per user. It never records the bot, unrelated members, or everybody in a voice channel. Training segments shorter than `MIN_TRAINING_SEGMENT_SECONDS` are discarded (default: 2 seconds); this is independent of best-sample eligibility. `/train stop` reports measured quality and review controls but never publicly attaches raw training WAVs. An owner can privately inspect a pending candidate with `/bestsample show`.
+`/train start users:@user` records at most `MAX_TRAINING_TARGETS` (default 8) explicitly selected non-bot guild members who are currently in the same voice channel. It records only the explicitly selected Discord user IDs, with a separate receive stream per user. It never records the bot, unrelated members, or everybody in a voice channel. Training segments shorter than `MIN_TRAINING_SEGMENT_SECONDS` are discarded (default: 2 seconds); this is independent of best-sample eligibility. `/train stop` reports measured quality and review controls but never publicly attaches raw training WAVs. Any guild operator can publicly inspect a pending candidate with `/bestsample show user:@Target` and accept or reject it.
 
 ## Audio and model behavior
 
@@ -20,11 +20,11 @@ Fish HTTP and realtime selection are independent. `FISH_TTS_MODEL` accepts `s1`,
 
 ## Setup and operation
 
-Required settings are `DISCORD_TOKEN`, `DISCORD_CLIENT_ID`, `DISCORD_GUILD_ID`, `BOT_COMMAND_CHANNEL_ID`, `FISH_API_KEY`, and `DATABASE_URL` (normally `file:/data/bot.db`). Store secrets in a secret manager; Fish authorization headers are never logged. Mount persistent storage at `/data` and back up the SQLite database and training directory consistently.
+Required settings are `DISCORD_TOKEN`, `DISCORD_CLIENT_ID`, `DISCORD_GUILD_ID`, `FISH_API_KEY`, and `DATABASE_URL` (normally `file:/data/bot.db`). Store secrets in a secret manager; Fish authorization headers are never logged. Mount persistent storage at `/data` and back up the SQLite database and training directory consistently.
 
 1. Create a Discord application and bot without privileged intents.
-2. Invite it with `bot applications.commands` and **View Channels, Send Messages, Connect, Speak, Attach Files** permissions. Grant access to the dedicated control channel using ordinary Discord channel permissions.
-3. Configure `.env`, start the service, then use `/train start users:@user`, `/train stop`, `/bestsample`, `/train rebuild`, `/say`, and `/live` from the control channel.
+2. Invite it with `bot applications.commands` and **View Channels, Send Messages, Connect, Speak, Attach Files** permissions. Use ordinary Discord channel permissions to choose where members can invoke it.
+3. Configure `.env`, start the service, then use `/train start users:@user`, `/train stop`, `/bestsample`, `/train rebuild`, `/say`, and `/live` from any permitted guild text channel.
 
 ```bash
 cp .env.example .env
@@ -33,7 +33,7 @@ npm run lint && npm run typecheck && npm run typecheck:test && npm test && npm r
 docker compose up -d
 ```
 
-At startup the bot parses configuration, completes SQLite migrations and managed-storage reconciliation, authenticates Discord, validates the configured control channel, registers commands, then enables cleanup workers and interaction processing. Reconciliation removes only project-generated orphan WAV paths, preserves referenced WAVs, and deactivates active rows whose managed files are missing. Shutdown rejects new interactions, drains already-running interactions, then drains capture/live/playback/provider cleanup, destroys Discord, and closes SQLite last.
+At startup the bot parses configuration, completes SQLite migrations and managed-storage reconciliation, authenticates Discord, validates the configured guild, registers commands, then enables cleanup workers and interaction processing. Reconciliation removes only project-generated orphan WAV paths, preserves referenced WAVs, and deactivates active rows whose managed files are missing. Shutdown rejects new interactions, drains already-running interactions, then drains capture/live/playback/provider cleanup, destroys Discord, and closes SQLite last.
 
 ## Credential-dependent integration smoke
 
@@ -43,19 +43,19 @@ At startup the bot parses configuration, completes SQLite migrations and managed
 FISH_TEST_DATABASE_URL=file:/data/fish-smoke.db npm run test:integration
 ```
 
-With real credentials, the script verifies Discord authentication, application ID, configured guild, control channel, and command registration. ASR is verified only when `FISH_TEST_REFERENCE_FILE` is supplied. With `FISH_TEST_VOICE_ID`, HTTP TTS with `FISH_TTS_MODEL`; realtime audio and `finish(reason="stop")` with `FISH_REALTIME_MODEL`; temporary private voice creation when reference audio is supplied; and durable deletion using isolated `FISH_TEST_DATABASE_URL`. It does not fake Discord voice receive. End-to-end Discord UDP/Opus receive, ASR, realtime synthesis, and playback still require Fish credentials plus a human/test account in a real Discord voice channel.
+With real credentials, the script verifies Discord authentication, application ID, configured guild and command registration. ASR is verified only when `FISH_TEST_REFERENCE_FILE` is supplied. With `FISH_TEST_VOICE_ID`, HTTP TTS with `FISH_TTS_MODEL`; realtime audio and `finish(reason="stop")` with `FISH_REALTIME_MODEL`; temporary private voice creation when reference audio is supplied; and durable deletion using isolated `FISH_TEST_DATABASE_URL`. It does not fake Discord voice receive. End-to-end Discord UDP/Opus receive, ASR, realtime synthesis, and playback still require Fish credentials plus a human/test account in a real Discord voice channel.
 
 ## Operator and deployment model
 
-Everyone whom Discord permits to use the dedicated `BOT_COMMAND_CHANNEL_ID` is a trusted operator for shared operations such as `/say`, `/live`, and model rebuilds. Owner-only inspection, rename, review, and deletion operations remain owner-restricted. `/train start` performs only practical capture validation: targets are deduplicated guild members, must be non-bot users in the invoker's voice channel, and are capped by `MAX_TRAINING_TARGETS` (default 8). Profiles are created lazily after the complete target list passes validation; no enrollment, role allowlist, or per-target text-channel permission system exists.
+Every member whom Discord permits to invoke commands in the configured guild is a trusted operator. Commands select stored voices and data with Discord user options, use immutable Discord user IDs internally, and may manage any bot-managed guild user. Normal command responses are public. `/renamevoice` is intentionally not exposed. `/train start` performs only practical capture validation: targets are deduplicated guild members, must be non-bot users in the invoker's voice channel, and are capped by `MAX_TRAINING_TARGETS` (default 8). Profiles are created lazily after the complete target list passes validation; no enrollment, role allowlist, or per-target text-channel permission system exists.
 
 Playback labels and normal logs contain request metadata and character counts, never raw `/say` text or ASR transcripts. Deleted personal sample/review metadata is removed transactionally; only path-safe WAV cleanup work remains in a durable minimal outbox and is retried periodically without waiting for restart.
 
-For Railway, mount a persistent volume at `/data`, set `DATABASE_URL=file:/data/bot.db`, and keep `MAX_TRAINING_STORAGE_MB` below volume capacity with a safety margin. Supply Discord/Fish secrets and `BOT_COMMAND_CHANNEL_ID`. The image normally runs as UID 10001; if the mounted volume is not writable by that UID, Railway may require `RAILWAY_RUN_UID=0`. Configure a nonzero `RAILWAY_DEPLOYMENT_DRAINING_SECONDS` long enough for Fish requests and runtime cleanup to drain. CI cannot prove mounted-volume ownership. Discord voice receive is not a formally stable public receive API, so real Fish credentials and human Discord voice traffic remain required for end-to-end runtime validation.
+For Railway, mount a persistent volume at `/data`, set `DATABASE_URL=file:/data/bot.db`, and keep `MAX_TRAINING_STORAGE_MB` below volume capacity with a safety margin. Supply the Discord and Fish secrets. The image normally runs as UID 10001; if the mounted volume is not writable by that UID, Railway may require `RAILWAY_RUN_UID=0`. Configure a nonzero `RAILWAY_DEPLOYMENT_DRAINING_SECONDS` long enough for Fish requests and runtime cleanup to drain. CI cannot prove mounted-volume ownership. Discord voice receive is not a formally stable public receive API, so real Fish credentials and human Discord voice traffic remain required for end-to-end runtime validation.
 
 ### Runtime lifecycle notes
 
-Startup authenticates Discord and validates the configured guild/control channel and bot permissions before command registration, background cleanup workers, or interaction acceptance are enabled. A failed startup explicitly drains initialized services, destroys Discord, and closes SQLite. HTTP Fish operations use `FISH_HTTP_TIMEOUT_MS`, ASR uses `FISH_ASR_TIMEOUT_MS`, and realtime WebSocket synthesis uses `FISH_REALTIME_TIMEOUT_MS`.
+Startup authenticates Discord and validates the configured guild before command registration, background cleanup workers, or interaction acceptance are enabled. A failed startup explicitly drains initialized services, destroys Discord, and closes SQLite. HTTP Fish operations use `FISH_HTTP_TIMEOUT_MS`, ASR uses `FISH_ASR_TIMEOUT_MS`, and realtime WebSocket synthesis uses `FISH_REALTIME_TIMEOUT_MS`.
 
 Privacy deletion removes personal sample/review metadata transactionally and places only managed WAV paths in a minimal durable local-cleanup outbox. Physical deletion is path-validated and retried periodically. Files still being admitted are protected from reconciliation until repository admission completes.
 
