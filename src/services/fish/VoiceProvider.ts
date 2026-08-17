@@ -1,5 +1,5 @@
 export interface VoiceReference {path:string;transcript?:string}
-export interface SynthesisInput {voiceId:string;text:string;speed?:number}
+export interface SynthesisInput {voiceId:string;text:string;speed?:number;signal?:AbortSignal}
 export interface VoiceProvider {
   createVoice(input:{name:string;references:VoiceReference[]}):Promise<{id:string}>;
   synthesize(input:SynthesisInput):Promise<Uint8Array>;
