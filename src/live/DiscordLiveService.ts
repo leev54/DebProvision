@@ -6,6 +6,7 @@ interface Session {pipeline:LiveVoicePipeline;controller:AbortController;detach:
 export class DiscordLiveService {
   private sessions=new Map<string,Session>();
   constructor(private transcription:TranscriptionService,private fish:VoiceProvider,private voice:DiscordVoiceRuntime,private maxLagMs=3000,private maxUtteranceMs=120_000){}
+  private async cancelGroup(guild:string,groupId:string){const runtime=this.voice as DiscordVoiceRuntime&{cancelGroupAndDrain?:(guild:string,groupId:string)=>Promise<number>};if(runtime.cancelGroupAndDrain)await runtime.cancelGroupAndDrain(guild,groupId);else runtime.cancelGroup(guild,groupId);}
   start(guild:string,connection:VoiceConnection,sourceUser:string,voiceId:string,alias=voiceId){
     if(this.sessions.has(guild))throw new Error('Live mode is already active');
     const pipeline=new LiveVoicePipeline(sourceUser,voiceId,this.maxLagMs,alias);const session:Session={pipeline,controller:new AbortController(),streams:new Set(),groupId:`live:${guild}:${randomUUID()}`,detach:()=>{},sequence:0,tail:Promise.resolve()};
@@ -37,12 +38,12 @@ export class DiscordLiveService {
       },session.groupId);
     }catch(err){if(!session.controller.signal.aborted&&!(err instanceof DOMException&&['AbortError','TimeoutError'].includes(err.name)))logger.error({err,guild},'live utterance failed');}
   }
-  async stop(guild:string){const session=this.sessions.get(guild);if(!session)return false;session.detach();session.pipeline.stop();session.controller.abort();for(const stream of session.streams)stream.destroy();session.streams.clear();this.voice.cancelGroup(guild,session.groupId);await session.tail;this.sessions.delete(guild);return true;}
+  async stop(guild:string){const session=this.sessions.get(guild);if(!session)return false;session.detach();session.pipeline.stop();session.controller.abort();for(const stream of session.streams)stream.destroy();session.streams.clear();await this.cancelGroup(guild,session.groupId);await session.tail;this.sessions.delete(guild);return true;}
   async stopAll(){await Promise.all([...this.sessions.keys()].map(guild=>this.stop(guild)));}
   status(guild:string){return this.sessions.get(guild)?.pipeline;}
   async switchVoice(guild:string,id:string,alias?:string){
     const session=this.sessions.get(guild);if(!session)return false;
-    if(session.pipeline.target()!==id)this.voice.cancelGroup(guild,session.groupId);
+    if(session.pipeline.target()!==id)await this.cancelGroup(guild,session.groupId);
     session.pipeline.switchVoice(id,alias);return true;
   }
 }

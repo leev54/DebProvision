@@ -2,7 +2,7 @@ import {logger} from '../utils/logger.js';
 export interface QueueItem {id:string;label:string;groupId?:string;play:(signal:AbortSignal)=>Promise<void>;cleanup?:()=>Promise<void>}
 export interface PlaybackReservation {commit(item:QueueItem):void;release():void}
 export class PlaybackQueue {
-  private items:QueueItem[]=[];private active?:QueueItem;private controller?:AbortController;private running=false;private draining?:Promise<void>;private reservations=0;private reservationEpoch=0;
+  private items:QueueItem[]=[];private active?:QueueItem;private controller?:AbortController;private activeDone?:Promise<void>;private resolveActive?:()=>void;private running=false;private draining?:Promise<void>;private reservations=0;private reservationEpoch=0;
   constructor(private capacity=50){}
   hasCapacity(){return this.list().length+this.reservations<this.capacity;}
   reserve():PlaybackReservation|undefined{if(!this.hasCapacity())return;this.reservations++;const epoch=this.reservationEpoch;let settled=false;return {commit:item=>{if(settled||epoch!==this.reservationEpoch)throw new Error('Playback reservation is no longer valid');settled=true;this.reservations--;this.items.push(item);this.kick();},release:()=>{if(settled)return;settled=true;if(epoch===this.reservationEpoch)this.reservations--;}};}
@@ -10,11 +10,12 @@ export class PlaybackQueue {
   list(){return [this.active,...this.items].filter(Boolean) as QueueItem[];}
   skip(){if(!this.active)return false;this.controller?.abort();return true;}
   cancelGroup(groupId:string){const before=this.items.length;this.items=this.items.filter(x=>x.groupId!==groupId);if(this.active?.groupId===groupId)this.controller?.abort();return before-this.items.length+(this.active?.groupId===groupId?1:0);}
+  async cancelGroupAndDrain(groupId:string){const before=this.items.length;this.items=this.items.filter(x=>x.groupId!==groupId);const active=this.active?.groupId===groupId,done=active?this.activeDone:undefined;if(active)this.controller?.abort();await done;return before-this.items.length+(active?1:0);}
   async stop(){this.items=[];this.reservations=0;this.reservationEpoch++;this.controller?.abort();await this.draining;}
   private kick(){if(this.draining)return;this.draining=this.drain().catch(err=>logger.error({err},'playback queue drain failed')).finally(()=>{this.draining=undefined;if(this.items.length)this.kick();});}
   private async drain(){
     if(this.running)return;this.running=true;
-    try{while((this.active=this.items.shift())){const x=this.active;const controller=new AbortController();this.controller=controller;try{await x.play(controller.signal);}catch(err){if(!controller.signal.aborted)logger.error({err,itemId:x.id,label:x.label},'playback item failed');}finally{try{await x.cleanup?.();}catch(err){logger.error({err,itemId:x.id},'playback cleanup failed');}if(this.controller===controller)this.controller=undefined;if(this.active===x)this.active=undefined;}}}
+    try{while((this.active=this.items.shift())){const x=this.active;const controller=new AbortController();this.controller=controller;this.activeDone=new Promise(resolve=>this.resolveActive=resolve);try{await x.play(controller.signal);}catch(err){if(!controller.signal.aborted)logger.error({err,itemId:x.id,label:x.label},'playback item failed');}finally{try{await x.cleanup?.();}catch(err){logger.error({err,itemId:x.id},'playback cleanup failed');}if(this.controller===controller)this.controller=undefined;if(this.active===x)this.active=undefined;this.resolveActive?.();this.resolveActive=undefined;this.activeDone=undefined;}}}
     finally{this.active=undefined;this.controller=undefined;this.running=false;}
   }
 }

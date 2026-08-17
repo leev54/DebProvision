@@ -1,5 +1,6 @@
+import {PublicCommandError} from '../../discord/PublicCommandError.js';
 import type { DB } from '../client.js';
-export function normalizeVoiceAlias(value:string){const alias=value.trim();if(!alias||alias.length>64||/[\p{Cc}\p{Cf}\r\n]/u.test(alias)||/@|<[@#&]/.test(alias))throw new Error('Voice alias must be 1-64 characters without controls, newlines, or mentions');return alias;}
+export function normalizeVoiceAlias(value:string){const alias=value.trim();if(!alias||alias.length>64||/[\p{Cc}\p{Cf}\r\n]/u.test(alias)||/@|<[@#&]/.test(alias))throw new PublicCommandError('Voice alias must be 1-64 characters without controls, newlines, or mentions');return alias;}
 export class VoiceRepository {
   constructor(private db:DB){}
   ensureProfile(guild:string,user:string,alias=`voice-${user.slice(-6)}`){const existing=this.voiceByOwner(guild,user);if(existing)return existing;const now=Date.now();return this.db.transaction(()=>{let unique=normalizeVoiceAlias(alias);const exists=this.db.prepare('SELECT 1 FROM voices WHERE guild_id=? AND alias=? COLLATE NOCASE');if(exists.get(guild,unique))unique=normalizeVoiceAlias(`${unique.slice(0,57)}-${user.slice(-6)}`);let suffix=2;while(exists.get(guild,unique))unique=`${normalizeVoiceAlias(alias).slice(0,48)}-${user.slice(-6)}-${suffix++}`;this.db.prepare('INSERT INTO voices(guild_id,owner_id,alias,created_at,updated_at) VALUES(?,?,?,?,?) ON CONFLICT(guild_id,owner_id) DO NOTHING').run(guild,user,unique,now,now);return this.voiceByOwner(guild,user);})();}
@@ -9,9 +10,10 @@ export class VoiceRepository {
   /** @deprecated Compatibility shim. */
   resetVoiceAndQueue(guild:string,user:string,voiceId:number){return this.resetVoiceDataAndQueue(guild,user,voiceId).remoteId;}
   voice(guild:string,alias:string){return this.db.prepare('SELECT * FROM voices WHERE guild_id=? AND alias=? COLLATE NOCASE').get(guild,alias) as any;}
+  voiceById(guild:string,id:number){return this.db.prepare('SELECT * FROM voices WHERE guild_id=? AND id=?').get(guild,id) as any;}
   voiceByOwner(guild:string,owner:string){return this.db.prepare('SELECT * FROM voices WHERE guild_id=? AND owner_id=?').get(guild,owner) as any;}
   voices(guild:string){return this.db.prepare('SELECT id,alias,owner_id,fish_voice_id,model_version,state_revision,last_rebuilt_at FROM voices WHERE guild_id=? ORDER BY alias').all(guild) as any[];}
-  rename(guild:string,user:string,current:string,alias:string){const normalized=normalizeVoiceAlias(alias);try{return this.db.prepare('UPDATE voices SET alias=?,updated_at=? WHERE guild_id=? AND owner_id=? AND alias=? COLLATE NOCASE').run(normalized,Date.now(),guild,user,current).changes;}catch(error){if(error instanceof Error&&error.message.includes('UNIQUE'))throw new Error('That voice alias is already in use');throw error;}}
+  rename(guild:string,user:string,current:string,alias:string){const normalized=normalizeVoiceAlias(alias);try{return this.db.prepare('UPDATE voices SET alias=?,updated_at=? WHERE guild_id=? AND owner_id=? AND alias=? COLLATE NOCASE').run(normalized,Date.now(),guild,user,current).changes;}catch(error){if(error instanceof Error&&error.message.includes('UNIQUE'))throw new PublicCommandError('That voice alias is already in use');throw error;}}
 
 
   /** @deprecated Test/setup helper; production replacement uses activateReplacementAndQueueOld. */

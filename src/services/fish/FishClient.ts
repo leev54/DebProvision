@@ -10,7 +10,7 @@ export class FishClient implements VoiceProvider {
   private headers(extra:HeadersInit={}){return {Authorization:`Bearer ${this.apiKey}`,...extra};}
   private async request(url:string,init:RequestInit,operation:string){
     let res:Response;try{res=await fetch(url,{...init,signal:init.signal?AbortSignal.any([init.signal,AbortSignal.timeout(this.httpTimeoutMs)]):AbortSignal.timeout(this.httpTimeoutMs)});}catch{if(init.signal?.aborted)throw init.signal.reason;throw new FishApiError(`${operation} transport failed`,undefined,true);}
-    if(!res.ok){await res.body?.cancel();throw new FishApiError(`${operation} failed (${res.status})`,res.status,res.status===429||res.status>=500);}
+    if(!res.ok){await res.body?.cancel();throw new FishApiError(`${operation} failed (${res.status})`,res.status,res.status===408||res.status===429||res.status>=500);}
     return res;
   }
   async createVoice(input:{name:string;references:VoiceReference[]}){
@@ -46,6 +46,6 @@ export class FishClient implements VoiceProvider {
   }
   async deleteVoice(id:string){
     const res=await fetch(`${this.base}/model/${encodeURIComponent(id)}`,{method:'DELETE',headers:this.headers(),signal:AbortSignal.timeout(this.httpTimeoutMs)});
-    if(!res.ok&&res.status!==404){const detail=(await res.text()).replace(/\s+/g,' ').slice(0,500);throw new FishApiError(`Fish deletion failed (${res.status})`,res.status,res.status===429||res.status>=500,detail||undefined);}
+    if(!res.ok&&res.status!==404){const detail=(await res.text()).replace(/\s+/g,' ').slice(0,500);throw new FishApiError(`Fish deletion failed (${res.status})`,res.status,res.status===408||res.status===429||res.status>=500,detail||undefined);}
   }
 }
