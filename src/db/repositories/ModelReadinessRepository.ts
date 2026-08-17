@@ -1,0 +1,9 @@
+import {createHash} from 'node:crypto';
+import type {DB} from '../client.js';
+export class ModelReadinessRepository {
+  constructor(private db:DB){}
+  version(ids:string[]){return createHash('sha256').update([...ids].sort().join('\n')).digest('hex');}
+  detect(guild:string,owner:string,selectedIds:string[]){if(!selectedIds.length){this.db.prepare('DELETE FROM model_readiness WHERE guild_id=? AND owner_id=?').run(guild,owner);return false;}const row=this.db.prepare('SELECT rebuilt_version,rebuilt_ids FROM model_readiness WHERE guild_id=? AND owner_id=?').get(guild,owner) as {rebuilt_version:string|null;rebuilt_ids:string|null}|undefined,lastIds:string[]=row?.rebuilt_ids?JSON.parse(row.rebuilt_ids):[],effective=lastIds.length?selectedIds.slice(0,lastIds.length):selectedIds,version=this.version(effective),ready=row?.rebuilt_version!==version;this.db.prepare('INSERT INTO model_readiness(guild_id,owner_id,dataset_version,rebuilt_version,rebuilt_ids,ready,updated_at) VALUES(?,?,?,?,?,?,?) ON CONFLICT(guild_id,owner_id) DO UPDATE SET dataset_version=excluded.dataset_version,ready=excluded.ready,updated_at=excluded.updated_at').run(guild,owner,version,row?.rebuilt_version??null,row?.rebuilt_ids??null,+ready,Date.now());return ready;}
+  rebuilt(guild:string,owner:string,selectedIds:string[]){const version=this.version(selectedIds);this.db.prepare('INSERT INTO model_readiness(guild_id,owner_id,dataset_version,rebuilt_version,rebuilt_ids,ready,updated_at) VALUES(?,?,?,?,?,0,?) ON CONFLICT(guild_id,owner_id) DO UPDATE SET dataset_version=excluded.dataset_version,rebuilt_version=excluded.rebuilt_version,rebuilt_ids=excluded.rebuilt_ids,ready=0,updated_at=excluded.updated_at').run(guild,owner,version,version,JSON.stringify([...selectedIds].sort()),Date.now());}
+  isReady(guild:string,owner:string){return !!(this.db.prepare('SELECT ready FROM model_readiness WHERE guild_id=? AND owner_id=?').get(guild,owner) as {ready:number}|undefined)?.ready;}
+}

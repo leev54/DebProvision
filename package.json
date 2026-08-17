@@ -11,8 +11,7 @@
     "typecheck:test": "tsc -p tsconfig.test.json",
     "lint": "eslint .",
     "test": "vitest run",
-    "register-commands": "tsx scripts/registerCommands.ts",
-    "test:integration": "tsx scripts/liveIntegration.ts"
+    "register-commands": "tsx scripts/registerCommands.ts"
   },
   "dependencies": {
     "@discordjs/opus": "^0.10.0",
