@@ -6,11 +6,11 @@ import type { VoiceProvider,VoiceReference } from './VoiceProvider.js';
 export class FishApiError extends Error {constructor(message:string,readonly status:number|undefined,readonly retryable:boolean,readonly diagnostic?:string){super(message);this.name='FishApiError';}}
 
 export class FishClient implements VoiceProvider {
-  constructor(private apiKey:string,private base='https://api.fish.audio',private timeoutMs=60_000,private ttsModel:'s1'|'s2-pro'|'s2.1-pro'|'s2.1-pro-free'='s2.1-pro-free',private realtimeModel:'s1'|'s2-pro'|'s2.1-pro'|'s2.1-pro-free'='s2-pro'){}
+  constructor(private apiKey:string,private base='https://api.fish.audio',private httpTimeoutMs=60_000,private ttsModel:'s1'|'s2-pro'|'s2.1-pro'|'s2.1-pro-free'='s2.1-pro-free',private realtimeModel:'s1'|'s2-pro'|'s2.1-pro'|'s2.1-pro-free'='s2-pro',private realtimeTimeoutMs=httpTimeoutMs){}
   private headers(extra:HeadersInit={}){return {Authorization:`Bearer ${this.apiKey}`,...extra};}
   private async request(url:string,init:RequestInit,operation:string){
-    let res:Response;try{res=await fetch(url,{...init,signal:init.signal?AbortSignal.any([init.signal,AbortSignal.timeout(this.timeoutMs)]):AbortSignal.timeout(this.timeoutMs)});}catch{if(init.signal?.aborted)throw init.signal.reason;throw new FishApiError(`${operation} transport failed`,undefined,true);}
-    if(!res.ok){const detail=(await res.text()).replace(/\s+/g,' ').slice(0,500);throw new FishApiError(`${operation} failed (${res.status})`,res.status,res.status===429||res.status>=500,detail||undefined);}
+    let res:Response;try{res=await fetch(url,{...init,signal:init.signal?AbortSignal.any([init.signal,AbortSignal.timeout(this.httpTimeoutMs)]):AbortSignal.timeout(this.httpTimeoutMs)});}catch{if(init.signal?.aborted)throw init.signal.reason;throw new FishApiError(`${operation} transport failed`,undefined,true);}
+    if(!res.ok){await res.body?.cancel();throw new FishApiError(`${operation} failed (${res.status})`,res.status,res.status===429||res.status>=500);}
     return res;
   }
   async createVoice(input:{name:string;references:VoiceReference[]}){
@@ -34,18 +34,18 @@ export class FishClient implements VoiceProvider {
     const url=new URL('/v1/tts/live',this.base.replace(/^http/,'ws'));
     await new Promise<void>((resolve,reject)=>{
       const ws=new WebSocket(url,{headers:{Authorization:`Bearer ${this.apiKey}`,model:this.realtimeModel}});let settled=false,successfulFinish=false,receivedAudio=false;let audioWrites=Promise.resolve();let firstTimer:NodeJS.Timeout|undefined,idleTimer:NodeJS.Timeout|undefined;
-      const openTimer=setTimeout(()=>finish(new Error('Fish realtime TTS connection timeout')),this.timeoutMs);
+      const openTimer=setTimeout(()=>finish(new Error('Fish realtime TTS connection timeout')),this.realtimeTimeoutMs);
       const clearTimers=()=>{clearTimeout(openTimer);if(firstTimer)clearTimeout(firstTimer);if(idleTimer)clearTimeout(idleTimer);};
       const finish=(error?:Error)=>{if(settled)return;settled=true;clearTimers();signal?.removeEventListener('abort',abort);ws.removeAllListeners();ws.on('error',()=>undefined);if(ws.readyState===WebSocket.OPEN)ws.close();else if(ws.readyState===WebSocket.CONNECTING)ws.terminate();if(error)reject(error);else resolve();};
-      const resetIdle=()=>{if(idleTimer)clearTimeout(idleTimer);idleTimer=setTimeout(()=>finish(new Error('Fish realtime TTS idle timeout')),this.timeoutMs);};
+      const resetIdle=()=>{if(idleTimer)clearTimeout(idleTimer);idleTimer=setTimeout(()=>finish(new Error('Fish realtime TTS idle timeout')),this.realtimeTimeoutMs);};
       const abort=()=>finish(new DOMException('TTS streaming aborted','AbortError'));if(signal?.aborted)return abort();signal?.addEventListener('abort',abort,{once:true});
-      ws.once('open',()=>{clearTimeout(openTimer);firstTimer=setTimeout(()=>finish(new Error('Fish realtime TTS first-audio timeout')),this.timeoutMs);resetIdle();ws.send(encode({event:'start',request:{text:'',reference_id:i.voiceId,format:'mp3',latency:'balanced',prosody:{speed:i.speed??1}}}));ws.send(encode({event:'text',text:i.text}));ws.send(encode({event:'flush'}));ws.send(encode({event:'stop'}));});
+      ws.once('open',()=>{clearTimeout(openTimer);firstTimer=setTimeout(()=>finish(new Error('Fish realtime TTS first-audio timeout')),this.realtimeTimeoutMs);resetIdle();ws.send(encode({event:'start',request:{text:'',reference_id:i.voiceId,format:'mp3',latency:'balanced',prosody:{speed:i.speed??1}}}));ws.send(encode({event:'text',text:i.text}));ws.send(encode({event:'flush'}));ws.send(encode({event:'stop'}));});
       ws.on('message',data=>{try{resetIdle();const event=decode(data instanceof Buffer?data:Buffer.from(data as ArrayBuffer)) as {event?:string;audio?:Uint8Array;message?:string;reason?:string};if(event.event==='audio'&&event.audio?.length){receivedAudio=true;if(firstTimer)clearTimeout(firstTimer);audioWrites=audioWrites.then(()=>onAudio(event.audio!) as Promise<void>|void);audioWrites.catch(error=>finish(error instanceof Error?error:new Error(String(error))));}else if(event.event==='finish'){if(event.reason!=='stop')return finish(new Error(`Fish realtime TTS failed: finish reason ${event.reason??'missing'}`));if(!receivedAudio)return finish(new Error('Fish realtime TTS finished without audio'));successfulFinish=true;void audioWrites.then(()=>finish(),error=>finish(error instanceof Error?error:new Error(String(error))));}else if(event.event==='error')finish(new Error(`Fish realtime TTS failed: ${event.message??'unknown error'}`));}catch(error){finish(error instanceof Error?error:new Error(String(error)));}});
       ws.once('error',error=>finish(error));ws.once('close',()=>{if(!successfulFinish)finish(new Error('Fish realtime TTS socket closed before finish(stop)'));});
     });
   }
   async deleteVoice(id:string){
-    const res=await fetch(`${this.base}/model/${encodeURIComponent(id)}`,{method:'DELETE',headers:this.headers(),signal:AbortSignal.timeout(this.timeoutMs)});
+    const res=await fetch(`${this.base}/model/${encodeURIComponent(id)}`,{method:'DELETE',headers:this.headers(),signal:AbortSignal.timeout(this.httpTimeoutMs)});
     if(!res.ok&&res.status!==404){const detail=(await res.text()).replace(/\s+/g,' ').slice(0,500);throw new FishApiError(`Fish deletion failed (${res.status})`,res.status,res.status===429||res.status>=500,detail||undefined);}
   }
 }

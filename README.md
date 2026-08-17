@@ -33,7 +33,7 @@ npm run lint && npm run typecheck && npm run typecheck:test && npm test && npm r
 docker compose up -d
 ```
 
-At startup the bot parses configuration, completes SQLite migrations, reconciles the bot-managed training directory, cleans temporary files, starts durable provider cleanup, registers commands, and logs in. Reconciliation removes only project-generated orphan WAV paths, preserves referenced WAVs, and deactivates active rows whose managed files are missing. Shutdown rejects new interactions, drains already-running interactions, then drains capture/live/playback/provider cleanup, destroys Discord, and closes SQLite last.
+At startup the bot parses configuration, completes SQLite migrations and managed-storage reconciliation, authenticates Discord, validates the configured control channel, registers commands, then enables cleanup workers and interaction processing. Reconciliation removes only project-generated orphan WAV paths, preserves referenced WAVs, and deactivates active rows whose managed files are missing. Shutdown rejects new interactions, drains already-running interactions, then drains capture/live/playback/provider cleanup, destroys Discord, and closes SQLite last.
 
 ## Credential-dependent integration smoke
 
@@ -49,6 +49,16 @@ With real credentials, the script verifies Discord authentication, application I
 
 Everyone whom Discord permits to use the dedicated `BOT_COMMAND_CHANNEL_ID` is a trusted operator for shared operations such as `/say`, `/live`, and model rebuilds. Owner-only inspection, rename, review, and deletion operations remain owner-restricted. `/train start` performs only practical capture validation: targets are deduplicated guild members, must be non-bot users in the invoker's voice channel, and are capped by `MAX_TRAINING_TARGETS` (default 8). Profiles are created lazily after the complete target list passes validation; no enrollment, role allowlist, or per-target text-channel permission system exists.
 
-Playback labels and normal logs contain request metadata and character counts, never raw `/say` text or ASR transcripts. Deleted managed WAVs are tombstoned immediately and retried by a periodic managed-storage reconciler without waiting for restart.
+Playback labels and normal logs contain request metadata and character counts, never raw `/say` text or ASR transcripts. Deleted personal sample/review metadata is removed transactionally; only path-safe WAV cleanup work remains in a durable minimal outbox and is retried periodically without waiting for restart.
 
 For Railway, mount a persistent volume at `/data`, set `DATABASE_URL=file:/data/bot.db`, and keep `MAX_TRAINING_STORAGE_MB` below volume capacity with a safety margin. Supply Discord/Fish secrets and `BOT_COMMAND_CHANNEL_ID`. The image normally runs as UID 10001; if the mounted volume is not writable by that UID, Railway may require `RAILWAY_RUN_UID=0`. Configure a nonzero `RAILWAY_DEPLOYMENT_DRAINING_SECONDS` long enough for Fish requests and runtime cleanup to drain. CI cannot prove mounted-volume ownership. Discord voice receive is not a formally stable public receive API, so real Fish credentials and human Discord voice traffic remain required for end-to-end runtime validation.
+
+### Runtime lifecycle notes
+
+Startup authenticates Discord and validates the configured guild/control channel and bot permissions before command registration, background cleanup workers, or interaction acceptance are enabled. A failed startup explicitly drains initialized services, destroys Discord, and closes SQLite. HTTP Fish operations use `FISH_HTTP_TIMEOUT_MS`, ASR uses `FISH_ASR_TIMEOUT_MS`, and realtime WebSocket synthesis uses `FISH_REALTIME_TIMEOUT_MS`.
+
+Privacy deletion removes personal sample/review metadata transactionally and places only managed WAV paths in a minimal durable local-cleanup outbox. Physical deletion is path-validated and retried periodically. Files still being admitted are protected from reconciliation until repository admission completes.
+
+Run exactly one bot replica against a given SQLite database and Discord bot token. Do not use overlapping Railway replicas against the same `/data/bot.db`; multi-instance operation requires a different coordination/storage architecture.
+
+Fish model creation and SQLite staging cannot form a distributed transaction. If the process dies after Fish creates a model but before Fish returns/persists its ID, that remote resource cannot be recovered safely without a provider idempotency or scoped reconciliation API.

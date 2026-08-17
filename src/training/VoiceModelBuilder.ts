@@ -8,6 +8,6 @@ export class VoiceModelBuilder {
     const selected=this.curator.select(samples,Math.min(20,this.maxCount),this.maxSeconds).filter(s=>s.filePath&&s.reviewStatus!=='rejected');
     if(!selected.length)throw new Error('No curated reference samples');
     const replacement=await this.provider.createVoice({name,references:selected.map(s=>({path:s.filePath!,...(s.transcript?.trim()?{transcript:s.transcript.trim()}: {})}))});
-    try{this.stage(replacement.id);}catch(error){await this.cleanup(replacement.id);throw error;}try{await validate(replacement.id);return replacement;}catch(e){const cleanup=await this.cleanup(replacement.id);this.unstage(replacement.id);if(cleanup!=='deleted')throw new AggregateError([e],'Model validation failed; provider cleanup did not complete');throw e;}
+    try{this.stage(replacement.id);}catch(error){await this.cleanup(replacement.id);throw error;}try{await validate(replacement.id);return {...replacement,selectedIds:selected.map(sample=>sample.id)};}catch(e){const cleanup=await this.cleanup(replacement.id);this.unstage(replacement.id);if(cleanup!=='deleted')throw new AggregateError([e],'Model validation failed; provider cleanup did not complete');throw e;}
   }
 }

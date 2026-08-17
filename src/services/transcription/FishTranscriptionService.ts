@@ -9,7 +9,7 @@ export class FishTranscriptionService implements TranscriptionService {
     form.set('ignore_timestamps','true');
     const timeout=AbortSignal.timeout(this.timeoutMs);const combined=signal?AbortSignal.any([signal,timeout]):timeout;
     const response=await fetch(`${this.base}/v1/asr`,{method:'POST',headers:{Authorization:`Bearer ${this.apiKey}`},body:form,signal:combined});
-    if(!response.ok)throw new Error(`Fish ASR failed: ${response.status} ${(await response.text()).replace(/\s+/g,' ').slice(0,300)}`);
+    if(!response.ok)throw new Error(`Fish ASR failed (${response.status})`);
     const body=await response.json() as {text:string};
     return {text:body.text.trim()};
   }
