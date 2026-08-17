@@ -1,0 +1,4 @@
+import type {Client} from 'discord.js';import type {DB} from './db/client.js';import {logger} from './utils/logger.js';
+export interface ShutdownServices {drainInteractions():Promise<void>;stopCapture():Promise<void>;stopLive():Promise<void>;stopVoice():Promise<void>;stopLocalCleanup():Promise<void>;stopProviderCleanup():Promise<void>;client:Pick<Client,'destroy'>;db:Pick<DB,'close'>}
+const run=async(phase:string,operation:()=>unknown)=>{try{await operation();}catch(error){logger.error({err:error,phase},'shutdown cleanup phase failed');}};
+export async function shutdownRuntime(s:ShutdownServices){await run('interaction drain',s.drainInteractions);await run('capture',s.stopCapture);await run('live',s.stopLive);await run('voice',s.stopVoice);await run('local cleanup',s.stopLocalCleanup);await run('provider cleanup',s.stopProviderCleanup);await run('Discord destroy',()=>s.client.destroy());await run('DB close',()=>s.db.close());}
