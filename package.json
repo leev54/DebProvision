@@ -12,7 +12,7 @@
     "lint": "eslint .",
     "test": "vitest run",
     "register-commands": "tsx scripts/registerCommands.ts",
-    "test:integration": "tsx scripts/liveIntegration.ts"
+    "test:integration": "tsx scripts/providerIntegration.ts"
   },
   "dependencies": {
     "@discordjs/opus": "^0.10.0",

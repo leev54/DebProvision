@@ -1,0 +1,10 @@
+import {writeFile} from 'node:fs/promises';
+import {REST,Routes} from 'discord.js';
+import {loadConfig} from '../src/config/env.js';
+import {commands,registerCommands} from '../src/discord/registerCommands.js';
+import {FishClient} from '../src/services/fish/FishClient.js';
+const config=loadConfig(),rest=new REST().setToken(config.DISCORD_TOKEN);
+await registerCommands(config.DISCORD_TOKEN,config.DISCORD_CLIENT_ID,config.DISCORD_GUILD_ID);
+const application=await rest.get(Routes.currentApplication()) as {id:string};if(application.id!==config.DISCORD_CLIENT_ID)throw new Error('DISCORD_CLIENT_ID does not match the token application');
+await rest.get(Routes.guild(config.DISCORD_GUILD_ID));const installed=await rest.get(Routes.applicationGuildCommands(config.DISCORD_CLIENT_ID,config.DISCORD_GUILD_ID)) as {name:string}[];if(installed.length!==commands.length)throw new Error(`Discord installed ${installed.length}/${commands.length} commands`);
+const voiceId=process.env.FISH_TEST_VOICE_ID;if(!voiceId)throw new Error('FISH_TEST_VOICE_ID is required for the provider smoke test');const fish=new FishClient(config.FISH_API_KEY,'https://api.fish.audio',config.FISH_HTTP_TIMEOUT_MS,config.FISH_TTS_MODEL),audio=await fish.synthesize({voiceId,text:'Deployment integration test successful.'});const output=process.env.FISH_TEST_OUTPUT_FILE;if(output)await writeFile(output,audio);console.log(`Discord registration verified; Fish TTS returned ${audio.byteLength} bytes.`);
