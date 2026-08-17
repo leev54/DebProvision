@@ -14,5 +14,4 @@ COPY --from=build --chown=bot:bot /app/dist ./dist
 COPY --chown=bot:bot package.json ./
 RUN mkdir /data && chown bot:bot /data
 USER bot
-VOLUME ["/data"]
 CMD ["node","dist/index.js"]
