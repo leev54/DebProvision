@@ -1,12 +1,16 @@
 import {logger} from '../utils/logger.js';
 export interface QueueItem {id:string;label:string;groupId?:string;play:(signal:AbortSignal)=>Promise<void>;cleanup?:()=>Promise<void>}
+export interface PlaybackReservation {commit(item:QueueItem):void;release():void}
 export class PlaybackQueue {
-  private items:QueueItem[]=[];private active?:QueueItem;private controller?:AbortController;private running=false;private draining?:Promise<void>;
-  enqueue(item:QueueItem){this.items.push(item);this.kick();}
+  private items:QueueItem[]=[];private active?:QueueItem;private controller?:AbortController;private running=false;private draining?:Promise<void>;private reservations=0;private reservationEpoch=0;
+  constructor(private capacity=50){}
+  hasCapacity(){return this.list().length+this.reservations<this.capacity;}
+  reserve():PlaybackReservation|undefined{if(!this.hasCapacity())return;this.reservations++;const epoch=this.reservationEpoch;let settled=false;return {commit:item=>{if(settled||epoch!==this.reservationEpoch)throw new Error('Playback reservation is no longer valid');settled=true;this.reservations--;this.items.push(item);this.kick();},release:()=>{if(settled)return;settled=true;if(epoch===this.reservationEpoch)this.reservations--;}};}
+  enqueue(item:QueueItem){const reservation=this.reserve();if(!reservation)throw new Error('Playback queue is full');reservation.commit(item);}
   list(){return [this.active,...this.items].filter(Boolean) as QueueItem[];}
   skip(){if(!this.active)return false;this.controller?.abort();return true;}
   cancelGroup(groupId:string){const before=this.items.length;this.items=this.items.filter(x=>x.groupId!==groupId);if(this.active?.groupId===groupId)this.controller?.abort();return before-this.items.length+(this.active?.groupId===groupId?1:0);}
-  async stop(){this.items=[];this.controller?.abort();await this.draining;}
+  async stop(){this.items=[];this.reservations=0;this.reservationEpoch++;this.controller?.abort();await this.draining;}
   private kick(){if(this.draining)return;this.draining=this.drain().catch(err=>logger.error({err},'playback queue drain failed')).finally(()=>{this.draining=undefined;if(this.items.length)this.kick();});}
   private async drain(){
     if(this.running)return;this.running=true;

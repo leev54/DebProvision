@@ -5,3 +5,7 @@ coverage
 .env
 data
 *.db
+*.wav
+*.mp3
+.env.*
+!.env.example
