@@ -4,14 +4,15 @@ import path from 'node:path';
 import type {DB} from '../db/client.js';
 import type {StateRepository} from '../db/repositories/StateRepository.js';
 import {logger} from '../utils/logger.js';
+import type {StorageCoordinator} from './StorageCoordinator.js';
 
 /** Produces atomic, self-contained local snapshots without copying a live WAL database. */
 export class BackupService {
   private timer?:NodeJS.Timeout;private running?:Promise<void>;
-  constructor(private db:DB,private state:StateRepository,private directory:string,private retention:number,private dataRoot='/data'){}
+  constructor(private db:DB,private state:StateRepository,private directory:string,private retention:number,private dataRoot='/data',private storage?:StorageCoordinator){}
   start(intervalMs:number){this.timer=setInterval(()=>void this.run(),intervalMs);this.timer.unref();}
   async stopAndDrain(){if(this.timer)clearInterval(this.timer);await this.running;}
-  run(){if(this.running)return this.running;this.running=this.create().catch(error=>{this.state.backupFailed(error);logger.error({err:error},'automatic backup failed');}).finally(()=>this.running=undefined);return this.running;}
+  run(){if(this.running)return this.running;this.running=(this.storage?this.storage.exclusive(()=>this.create()):this.create()).catch(error=>{this.state.backupFailed(error);logger.error({err:error},'automatic backup failed');}).finally(()=>this.running=undefined);return this.running;}
   private async create(){
     await mkdir(this.directory,{recursive:true});const name=`backup-${new Date().toISOString().replace(/[:.]/g,'-')}`,temporary=path.join(this.directory,`.${name}.tmp`),destination=path.join(this.directory,name);await rm(temporary,{recursive:true,force:true});await mkdir(temporary,{recursive:true});
     try{

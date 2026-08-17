@@ -8,7 +8,7 @@ Copy `.env.example` and set the required values:
 
 - `DISCORD_TOKEN`, `DISCORD_CLIENT_ID`, and `DISCORD_GUILD_ID` identify the Discord bot and its one guild.
 - `ADMIN_USER_ID` is the exact Discord snowflake of the one bot administrator. Discord roles and Discord's Administrator permission do not grant this access.
-- `COMMAND_CHANNEL_ID` is the exact snowflake of the one text channel in which every command is allowed.
+- `BOT_COMMAND_CHANNEL_ID` is the exact snowflake of the one text channel in which every command is allowed.
 - `FISH_API_KEY` configures Fish Audio.
 - `DATABASE_URL` must be a persistent `file:` URL (Railway should use `file:/data/bot.db`).
 
@@ -27,6 +27,8 @@ Administrative controls:
 The paused state lives in SQLite and therefore survives process restarts, Railway restarts, and redeploys when `/data` is mounted persistently.
 
 ## Dataset readiness
+
+`FISH_MAX_MODEL_UPLOAD_MB` (default `64`) is a conservative outbound model-upload budget with multipart headroom. Oversized eligible recordings are preserved and merely omitted from that request; HTTP 413 responses trigger at most two deterministic smaller-subset retries.
 
 Samples retain the existing score, review state, Fish reference-count limit, and selected-duration rules. As qualifying samples arrive, DebProvision fingerprints the eligible dataset and marks the model **rebuild ready** in `/trainingdata status`. A successful existing rebuild records that exact fingerprint. The same unchanged dataset is not marked as a new rebuild again; a changed qualifying dataset becomes ready. Rebuild execution remains explicit so provider staging, replacement coordination, and durable deletion guarantees are preserved.
 
