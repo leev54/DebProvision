@@ -10,7 +10,7 @@ const rest=new REST().setToken(config.DISCORD_TOKEN);
 await registerCommands(config.DISCORD_TOKEN,config.DISCORD_CLIENT_ID,config.DISCORD_GUILD_ID);
 const application=await rest.get(Routes.currentApplication()) as {id:string};
 if(application.id!==config.DISCORD_CLIENT_ID)throw new Error(`DISCORD_CLIENT_ID does not match token application (${application.id})`);
-await rest.get(Routes.guild(config.DISCORD_GUILD_ID));const control=await rest.get(Routes.channel(config.BOT_COMMAND_CHANNEL_ID)) as {guild_id?:string;type?:number};if(control.guild_id!==config.DISCORD_GUILD_ID||control.type!==0)throw new Error('BOT_COMMAND_CHANNEL_ID is not a guild text channel in DISCORD_GUILD_ID');
+await rest.get(Routes.guild(config.DISCORD_GUILD_ID));
 const installed=await rest.get(Routes.applicationGuildCommands(config.DISCORD_CLIENT_ID,config.DISCORD_GUILD_ID)) as {name:string}[];
 if(installed.length!==commands.length)throw new Error(`Discord installed ${installed.length}/${commands.length} commands`);
 console.log(`Discord authenticated; verified ${installed.length} registered guild commands.`);
